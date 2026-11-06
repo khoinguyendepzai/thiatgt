@@ -8,30 +8,29 @@ bám vạch, dự báo và cảnh báo xây dựng theo ba bài báo bên dướ
 
 ```
 Xe (Jetson) ──ảnh JPEG 640x480, UDP :7000──▶ PC: main.py
-            ──vận tốc dọc (m/s), UDP :7001──▶
                                                      │
    khử méo ống kính ─▶ chiếu Bird's-Eye View (IPM) ─▶ mask vạch trắng (HSV + Top-Hat + lọc hình thái)
    ─▶ tìm vạch (quanh vạch frame trước, hoặc cửa sổ trượt) + khớp đa thức
-   ─▶ bám từng vạch bằng bộ lọc Kalman: vị trí ngang tại đầu xe và tốc độ thay đổi
-   ─▶ khoảng hở góc đầu xe – vạch, thời gian tới lúc cắt vạch (TLC), LOR, góc lệch
-   ─▶ cảnh báo 2 cấp (vàng: sớm, đỏ: khẩn cấp), debounce 200 ms / nhả 300 ms ─▶ hiển thị, ghi CSV
+   ─▶ bám từng vạch bằng bộ lọc trượt: vị trí ngang tại đầu xe
+   ─▶ khoảng hở góc đầu xe – vạch, LOR
+   ─▶ cảnh báo 2 mức (vàng: lệch làn, đỏ: chạm vạch), debounce 200 ms / nhả 300 ms ─▶ hiển thị, ghi CSV
 ```
 
-Mọi phép đo đều tính theo mét trên mặt đường nhờ calib camera (khử méo) và homography mặt đường. Gốc toạ độ là tâm
-cầu sau của xe, `x` hướng tới trước, `y` sang trái.
+Hệ thống chỉ xét **vị trí** của xe so với vạch. Cố ý không dự báo và không dùng vận tốc: không có TLC, vận tốc ngang
+hay gia tốc ngang. Mọi phép đo tính theo mét trên mặt đường nhờ calib camera (khử méo) và homography mặt đường. Gốc
+toạ độ là tâm cầu sau của xe, `x` hướng tới trước, `y` sang trái.
 
 **Điều kiện cảnh báo** (xét riêng từng bên, khoảng hở đo tại góc đầu xe tới mép trong vạch):
 
 | Mức | Điều kiện |
 |---|---|
-| Cấp 2 — khẩn cấp (đỏ) | Góc đầu xe đã chạm/đè vạch, hoặc TLC < 1.0 s, hoặc LOR > 0.60 |
-| Cấp 1 — sớm (vàng) | TLC < 1.8 s, hoặc khoảng hở < 2.5 cm, hoặc LOR > 0.45 |
-| Không báo | Xe gần như đứng yên (vận tốc dọc < 0.1 m/s), hoặc hai vạch cùng tiến vào giữa (làn hẹp lại) |
+| Cấp 2 — chạm vạch (đỏ) | Khoảng hở ≤ 0: góc đầu xe đã chạm hoặc đè vạch |
+| Cấp 1 — lệch làn (vàng) | LOR > 0.45 (tương đương góc đầu xe cách vạch ~1.8 cm) |
 
-Mỗi cấp chỉ bật khi điều kiện của chính cấp đó kéo dài ≥ 200 ms. Cảnh báo tắt sau khi an toàn ≥ 300 ms, hoặc tắt
-ngay khi xe đã rời khỏi vạch và đang đi ra xa vạch. Để nhiễu quanh ngưỡng không làm cảnh báo chập chờn (hysteresis),
-ngưỡng được nới ra (TLC × 1.25, khoảng hở + 0.5 cm, LOR − 0.05) trong hai trường hợp: ngưỡng cấp 1 khi cấp 1 đang đếm
-hoặc đang bật, ngưỡng cấp 2 khi cấp 2 đã bật.
+Mỗi cấp chỉ bật khi điều kiện của chính cấp đó kéo dài ≥ 200 ms, và tắt sau khi an toàn ≥ 300 ms. Để nhiễu quanh
+ngưỡng không làm cảnh báo chập chờn (hysteresis), ngưỡng được nới ra (LOR − 0.05, khoảng hở + 0.5 cm): ngưỡng cấp 1
+khi cấp 1 đang đếm hoặc đang bật, ngưỡng cấp 2 khi cấp 2 đã bật. Hướng cảnh báo (trái/phải) được chốt lúc bắt đầu và
+giữ tới khi tắt, kể cả khi xe cắt hẳn qua vạch.
 
 Thông số sa bàn và xe đang dùng (`TrackAndVehicleParams` trong `main.py`):
 
@@ -48,8 +47,12 @@ Thông số sa bàn và xe đang dùng (`TrackAndVehicleParams` trong `main.py`)
 | Trong code | Bài báo | Ý tưởng sử dụng |
 |---|---|---|
 | Tài liệu 1 | S. Anbalagan et al., "Vision-Based Ingenious Lane Departure Warning System for Autonomous Vehicles", *Sustainability*, 2023. DOI: [10.3390/su15043535](https://doi.org/10.3390/su15043535) | Góc và hướng lệch của xe so với vạch làn |
-| Tài liệu 2 | N. Sukumar, P. Sumathi, "An Improved Lane Detection and Lane Departure Warning Framework for ADAS", *IEEE Trans. Consumer Electronics*, 2024. DOI: [10.1109/TCE.2024.3387708](https://doi.org/10.1109/TCE.2024.3387708) | Tỉ số lệch ngang LOR, ngưỡng cảnh báo 80% nửa làn, LOR > 0.6, phân biệt làn hẹp lại với xe lệch |
-| Tài liệu 3 | Yichen Zhong, "Design and Simulation of Lane Departure Warning Assistant Driving System", *JTIE*, 2026. DOI: [10.63887/jtie.2026.2.4.29](https://doi.org/10.63887/jtie.2026.2.4.29) | Cảnh báo 2 cấp theo TLC, debounce/nhả cảnh báo, tắt khi lái sửa, bám vạch bằng Kalman, các chỉ tiêu đánh giá |
+| Tài liệu 2 | N. Sukumar, P. Sumathi, "An Improved Lane Detection and Lane Departure Warning Framework for ADAS", *IEEE Trans. Consumer Electronics*, 2024. DOI: [10.1109/TCE.2024.3387708](https://doi.org/10.1109/TCE.2024.3387708) | Tỉ số lệch ngang LOR và ngưỡng 80% nửa làn: LOR vượt ngưỡng là lệch làn |
+| Tài liệu 3 | Yichen Zhong, "Design and Simulation of Lane Departure Warning Assistant Driving System", *JTIE*, 2026. DOI: [10.63887/jtie.2026.2.4.29](https://doi.org/10.63887/jtie.2026.2.4.29) | Debounce 200 ms, nhả 300 ms, hysteresis, bám vạch qua các frame, các chỉ tiêu đánh giá. Phần cảnh báo theo TLC của bài không dùng |
+
+**Báo cáo chi tiết:** [BaoCao_LDWS.pdf](BaoCao_LDWS.pdf) (17 trang) trình bày đầy đủ cơ sở lý thuyết áp dụng (camera và méo ống kính,
+homography và IPM, Top-Hat, khớp đa thức, lọc trượt, LOR, debounce/hysteresis), định nghĩa từng đại lượng, bộ tiêu chí đánh giá và kết quả đo.
+File PDF của ba bài báo không đưa vào repo; tra theo DOI ở bảng trên.
 
 ## Cài đặt
 
@@ -67,29 +70,21 @@ pip install opencv-python numpy
 python main.py                    # thêm --csv ketqua.csv để ghi kết quả từng frame
 ```
 
-PC lắng nghe hai cổng UDP trên mọi giao diện mạng:
-
-| Cổng | Nội dung mỗi gói |
-|---|---|
-| 7000 | Một ảnh JPEG 640x480. Phải nhỏ hơn 65 507 byte (giới hạn một gói UDP); ảnh khác cỡ sẽ bị co về 640x480 |
-| 7001 | Vận tốc dọc của xe (m/s): văn bản như `0.52`, hoặc số float32/float64 little-endian |
-
-Nếu quá 0.5 s không có gói vận tốc mới, hệ thống vẫn chạy nhưng không áp dụng điều kiện "xe đứng yên". Đổi cổng bằng
-`--port`, `--speed-port`.
+PC lắng nghe UDP cổng 7000 trên mọi giao diện mạng (đổi bằng `--port`). Mỗi gói là một ảnh JPEG 640x480, phải nhỏ hơn
+65 507 byte (giới hạn một gói UDP): nén chất lượng ~80 là khoảng 50 KB. Ảnh khác cỡ sẽ bị co về 640x480.
 
 **Chạy lại dữ liệu đã ghi** (không cần xe):
 
 ```bash
-python main.py --video run.mp4 --speed 0.5 --csv ketqua.csv
+python main.py --video run.mp4 --csv ketqua.csv
 python main.py --images thu_muc_anh --fps 30 --no-show --csv ketqua.csv
 ```
 
-Thời gian của từng frame tính theo fps nên debounce, Kalman và TLC chạy như thật. `--speed` là vận tốc dọc giả định
-không đổi. Khi chạy xong, chương trình in số frame ở từng mức cảnh báo và thời gian xử lý.
+Thời gian của từng frame tính theo fps nên debounce và bộ lọc trượt chạy như thật. Khi chạy xong, chương trình in số
+frame ở từng mức cảnh báo và thời gian xử lý.
 
 **Cửa sổ hiển thị:** ảnh camera kèm vùng làn tô màu theo mức cảnh báo, ảnh Bird's-Eye View với vạch đang bám (nét mảnh
-là vạch chỉ dự đoán hoặc suy ra), và mask nhị phân. Bảng thông số gồm trạng thái và lý do, độ lệch tâm, LOR, khoảng hở
-trái/phải, TLC, vận tốc ngang, góc lệch, vận tốc dọc, thời gian xử lý. `Space` để tạm dừng, `q` hoặc `ESC` để thoát.
+là vạch chỉ dự đoán hoặc suy ra), và mask nhị phân. Bảng thông số gồm trạng thái, độ lệch tâm, LOR, khoảng hở trái/phải, góc lệch, thời gian xử lý. `Space` để tạm dừng, `q` hoặc `ESC` để thoát.
 
 ## Calib
 
@@ -118,31 +113,29 @@ cần lấy các con số.
 ## Cấu trúc thư mục
 
 ```
-main.py      # toàn bộ LDWS: dò làn, bám vạch, TLC, cảnh báo, nhận UDP, chạy lại video/ảnh
+main.py      # toàn bộ LDWS: dò làn, bám vạch, cảnh báo lệch làn / chạm vạch, nhận UDP, chạy lại video/ảnh
 calib/       # script calib ống kính và homography mặt đường, ảnh và mốc calib mẫu
-ket_qua/     # hình kết quả: ảnh thật, các bước cảnh báo khi xe trôi ra khỏi làn, biểu đồ TLC
+BaoCao_LDWS.pdf  # báo cáo kỹ thuật dạng bài báo đánh giá
+ket_qua/     # hình kết quả: ảnh thật, các mức cảnh báo khi xe lệch dần khỏi làn, khoảng hở theo thời gian
 CLAUDE.md    # ghi chú kỹ thuật cho Claude Code
 ```
 
 ## Trạng thái
 
-Đã kiểm tra trên ảnh thật của sa bàn, có giả lập xe trôi ngang và xoay với giá trị đúng biết trước (4 chuỗi nhiễu
-đo, trôi 2/3/5 cm/s). Hình kết quả nằm trong `ket_qua/`.
-- Khoảng hở ở bên vạch xe đang tiến tới sai dưới 1–2 cm.
-- Cảnh báo cấp 1 bật lúc còn 1.4–1.9 s nữa mới chạm vạch, cấp 2 lúc còn 0.4–0.8 s.
-- Đứng yên giữa làn hoặc đứng sát vạch 3.6 cm: không báo nhầm.
-- Cảnh báo không tắt giữa chừng, không nhảy thẳng lên cấp 2.
-- Lái sửa: cảnh báo tắt ~0.1 s sau khi xe đã an toàn.
-- Cắt hẳn qua vạch vẫn giữ đúng hướng cảnh báo.
+Đã kiểm tra trên ảnh thật của sa bàn, có giả lập xe dịch ngang và xoay với giá trị đúng biết trước. Hình kết quả nằm
+trong `ket_qua/`.
+- Khoảng hở xe – vạch sai dưới ~2 cm (trung bình dưới 1 cm).
+- Lệch làn (vàng) bật khi góc đầu xe còn cách vạch khoảng 1–2 cm, chạm vạch (đỏ) bật ngay sau khi chạm vạch.
+  Mỗi cấp trễ ~0.2 s do debounce và ~0.1 s do bộ lọc trượt.
+- Xe đứng giữa làn hoặc đứng cách vạch 3.6 cm: không báo nhầm.
+- Cắt hẳn qua vạch vẫn giữ đúng hướng cảnh báo; quay lại làn thì cảnh báo tắt sau khi an toàn ≥ 300 ms.
 - Xử lý ~12 ms/frame.
 
 - [x] Sửa lỗi `main.py` không import được trên Python 3.11.
-- [x] Nhận vận tốc dọc của xe từ Jetson qua cổng UDP riêng (7001).
 - [x] Đo khoảng hở tại hai góc đầu xe thay vì tại đáy ảnh BEV.
-- [x] Bám vạch theo thời gian bằng bộ lọc Kalman, giữ đúng vạch trái/phải khi xe cắt vạch (Tài liệu 3).
-- [x] Dự báo TLC và cảnh báo 2 cấp theo TLC (Tài liệu 3).
+- [x] Bám vạch qua các frame bằng bộ lọc trượt, giữ đúng vạch trái/phải khi xe cắt vạch.
+- [x] Cảnh báo hai mức theo vị trí: lệch làn và chạm vạch.
 - [x] Chạy lại video/ảnh, ghi kết quả từng frame ra CSV.
 - [ ] Calib lại homography: trên ảnh BEV hai vạch chưa song song, bề rộng làn đo được 0.50–0.60 m thay vì 0.43 m.
       Trước khi calib lại, góc lệch chỉ để tham khảo.
-- [ ] Sau khi calib: bật `FUSE_SPEED_HEADING` để dùng thêm vận tốc dọc × góc lệch, giúp TLC phản ứng nhanh hơn.
 - [ ] Ghi video các lượt chạy thật, gán nhãn và đo tỉ lệ báo nhầm, bỏ sót, độ trễ.

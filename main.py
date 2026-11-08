@@ -42,9 +42,9 @@ class GroundCalibration:
     homography: np.ndarray = field(
         default_factory=lambda: np.array(
             [
-                [1.73535311e-05, 0.000344733838, 1.09045048],
-                [-0.00154327804, 3.85793958e-05, 0.444396494],
-                [2.74133999e-05, 0.00411555972, 1.0],
+                [1.38382102e-05, 0.000345778475, 1.08880963],
+                [-0.00153570693, 3.85623778e-05, 0.442112946],
+                [2.11989362e-05, 0.00410399309, 1.0],
             ],
             dtype=np.float64,
         )
@@ -54,8 +54,8 @@ class GroundCalibration:
     camera_matrix: np.ndarray = field(
         default_factory=lambda: np.array(
             [
-                [523.927255, 0.0, 286.149787],
-                [0.0, 702.587302, 285.762266],
+                [512.492640, 0.0, 287.186733],
+                [0.0, 687.516488, 284.552142],
                 [0.0, 0.0, 1.0],
             ],
             dtype=np.float64,
@@ -65,7 +65,7 @@ class GroundCalibration:
     # Hệ số méo ống kính (k1, k2, p1, p2, k3)
     dist_coeffs: np.ndarray = field(
         default_factory=lambda: np.array(
-            [-0.35767070, 0.16899265, -0.00088148, 0.00148428, -0.04019552],
+            [-0.35453198, 0.18076870, -0.00151746, 0.00140839, -0.06370173],
             dtype=np.float64,
         )
     )
@@ -74,7 +74,7 @@ class GroundCalibration:
 @dataclass
 class TrackAndVehicleParams:
     # Số đo sa bàn từ kTrackParams (main.cpp)
-    lane_gap: float = 0.40  # Khoảng trống giữa mép trong 2 vạch (m)
+    lane_gap: float = 0.35  # Khoảng trống giữa mép trong 2 vạch (m)
     line_width: float = 0.03  # Bề rộng vạch làn (m)
     dash_length: float = 0.13  # Chiều dài 1 nét đứt (m)
     dash_gap: float = 0.20  # Khe hở giữa 2 nét đứt (m)
@@ -82,8 +82,8 @@ class TrackAndVehicleParams:
 
     # Kích thước xe từ kLaneParams & kLaneChangeParams (main.cpp)
     wheelbase: float = 0.258  # Chiều dài cơ sở (m)
-    vehicle_width: float = 0.21  # Chiều rộng xe (m)
-    rear_axle_to_front: float = 0.36  # Cầu sau -> đầu xe (m)
+    vehicle_width: float = 0.185 # Chiều rộng xe (m)
+    rear_axle_to_front: float = 0.35  # Cầu sau -> đầu xe (m)
 
     @property
     def lane_width(self) -> float:

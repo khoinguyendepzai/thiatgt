@@ -272,7 +272,7 @@ class JetsonSender:
 # 7. DOC DU LIEU DAU VAO
 # ============================================================================
 SERIAL_BAUD = 115200
-SERIAL_TIMEOUT_SEC = 0.3   # qua thoi gian nay khong co du lieu -> coi nhu mat ket noi
+SERIAL_TIMEOUT_SEC = 2.0   # qua thoi gian nay khong co du lieu -> coi nhu mat ket noi
 
 
 class PedalSerialReader:

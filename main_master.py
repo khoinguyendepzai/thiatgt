@@ -74,13 +74,13 @@ class JetsonSender:
 
     SEND_TIMEOUT_S = 0.1
 
-    def __init__(self, port=6000):
+    def __init__(self, host="0.0.0.0", port=6000):
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         if os.name != "nt":
             # Linux: bind lại cổng được ngay sau khi tắt. Windows: SO_REUSEADDR cho HAI chương trình cùng bind một cổng
             # (xe có thể nối nhầm vào bản đang chạy cũ) nên không bật
             self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.server.bind(("0.0.0.0", port))
+        self.server.bind((host, port))
         self.server.listen(1)
         self.server.setblocking(False)
         self.client = None
@@ -113,7 +113,7 @@ class JetsonSender:
             return
 
         # 2. Đóng gói lệnh theo chuẩn C++: @vcb:<speed>;<steer>;<dir>;;\r\n
-        msg = f"@vcb:{out.speedCmd:.3f};{out.steerCmd:.3f};{out.driveDirCmd};;\r\n"
+        msg = f"@vcb:{out.speedCmd:.2f};{out.steerCmd:.2f};{out.driveDirCmd};;\r\n"
 
         # 3. Gửi lệnh đi
         try:
@@ -191,7 +191,10 @@ class AutonomousMasterController:
         self.pedals = pedals
 
         # TCP Server chờ xe kết nối (mặc định cổng 6000)
-        self.sender = None if args.no_send else JetsonSender(port=getattr(args, "tcp_port", 6000))
+        self.sender = None if args.no_send else JetsonSender(
+            host=getattr(args, "tcp_host", "0.0.0.0"),
+            port=getattr(args, "tcp_port", 6000),
+        )
 
         # Trạng thái dùng chung giữa các vòng lặp (mỗi biến một vòng ghi, thay cả object nên không cần khoá)
         self.road_history = ResultHistory(getattr(args, "max_frame_skew", 0.1), VISION_TIMEOUT_S)
@@ -422,6 +425,7 @@ def main():
     parser.add_argument("--serial-port", default="COM7", help="Cong Serial noi Arduino (ban dap, vo lang)")
     parser.add_argument("--lane-port", type=int, default=7000, help="Port UDP anh camera làn đã khử méo (giu/chuyen lan)")
     parser.add_argument("--road-port", type=int, default=7001, help="Port UDP anh camera nhin duong (YOLO)")
+    parser.add_argument("--tcp-host", default="0.0.0.0", help="Dia chi IP bind TCP server (mac dinh 0.0.0.0)")
     parser.add_argument("--tcp-port", type=int, default=6000, help="Port TCP cho xe ket noi de nhan lenh @vcb")
     parser.add_argument("--target-speed", type=float, default=0.3, help="Toc do muc tieu m/s (cho planner)")
     parser.add_argument("--no-send", action="store_true", help="Tat gui lenh TCP")

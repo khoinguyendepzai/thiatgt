@@ -14,9 +14,9 @@ class ClassCfg:
 
 # ================= CÁC VẬT THỂ =================
 CLASSES = (
-    ClassCfg(key="xe_may", model="models/xe_may.pt", names=(), real_height_m=1.10, real_width_m=0.69, conf=0.5, color=(255, 128, 0)),
-    ClassCfg(key="nguoi_di_bo", model="models/nguoi_di_bo.pt", names=(), real_height_m=0.1, real_width_m=None, conf=0.5, color=(0, 200, 255)),
-    ClassCfg(key="o_to", model="models/o_to.pt", names=(), real_height_m=1.50, real_width_m=1.73, conf=0.5, color=(0, 255, 0)),
+    ClassCfg(key="nguoi_di_bo", model="nguoi_di_bo.pt", names=(), real_height_m=0.1, real_width_m=None, conf=0.5, color=(0, 200, 255)),
+    ClassCfg(key="o_to", model="o_to.pt", names=(), real_height_m=1.50, real_width_m=1.73, conf=0.5, color=(0, 255, 0)),
+    # ClassCfg(key="xe_may", model="xe_may.pt", names=(), real_height_m=1.10, real_width_m=0.69, conf=0.5, color=(255, 128, 0)),
 )
 
 # ================= KHOẢNG CÁCH =================

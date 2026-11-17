@@ -14,6 +14,8 @@ class ObstacleDetector:
     def __init__(self):
         print("[VISION] Đang nạp model YOLO...")
         self.detector = MultiModelDetector(C.CLASSES, C.IMGSZ, C.NMS_IOU, C.DEVICE)
+        for k, v in self.detector.status.items():
+            print(f"  * [{k}]: {v}")
         self.tracker = Tracker(C.MATCH_IOU, C.CONFIRM_FRAMES, C.MAX_MISSED_S, C.SMOOTH_FRAMES)
         self.order = tuple(c.key for c in C.CLASSES)
 

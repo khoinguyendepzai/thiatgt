@@ -47,6 +47,7 @@ from main_4 import (
     DT_SEC,
     DriveDirSelector,
     Input,
+    NO_OBJECT,
     Output,
     PedalSerialReader,
     RawVehicleController,
@@ -313,9 +314,9 @@ class AutonomousMasterController:
 
         sys_input = Input(
             encoder=enc, ga=ga, lui=lui, phanh=phanh, driveDir=drive_dir,
-            distance_xe_may=distances["xe_may"],
-            distance_nguoi_di_bo=distances["nguoi_di_bo"],
-            distance_o_to=distances["o_to"],
+            distance_xe_may=distances.get("xe_may", NO_OBJECT),
+            distance_nguoi_di_bo=distances.get("nguoi_di_bo", NO_OBJECT),
+            distance_o_to=distances.get("o_to", NO_OBJECT),
         )
         sys_output = self.vehicle_ctrl.update(sys_input)
 

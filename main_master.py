@@ -3,9 +3,9 @@ MAIN MASTER - HUST Robotics 2026
 Tích hợp 4 luồng xử lý: YOLO, LDWS, Lane Change Planner, Vehicle Dynamics.
 Bao gồm TCP Server giao tiếp chuẩn C++ (gửi lệnh @vcb) xuống xe (Jetson / Pi 5).
 
-Xe gửi HAI luồng ảnh (pi5/pi_bridge.py), mỗi luồng một cổng UDP, mỗi gói một ảnh JPEG:
-  - Camera bird's-eye, cổng 7000 (--lane-port), 640x480: LDWS (giữ làn) + planner (chuyển làn).
-  - Camera nhìn đường, cổng 7001 (--road-port), 640x360: YOLO đo khoảng cách vật cản.
+Client jetson/ trên branch Lane-Keeping gửi HAI luồng JPEG chia chunk (>IHH):
+  - Camera làn đã khử méo (chưa BEV), cổng 7000 (--lane-port), 640x480: LDWS (giữ làn) + planner (chuyển làn).
+  - Camera nhìn đường, cổng 7001 (--road-port), 640x480: YOLO đo khoảng cách vật cản.
 
 Ba vòng lặp chạy song song (cùng ý tưởng với wheel_pedal_bridge.py: lệnh lái không bao giờ phải chờ việc nặng):
   - Vòng điều khiển 50 Hz (thread riêng): bàn đạp / vô lăng MỚI NHẤT -> RawVehicleController -> gửi @vcb qua TCP.
@@ -25,6 +25,7 @@ import threading
 import time
 import traceback
 from typing import NamedTuple, Optional
+from frame_transport import FrameReceiver, ResultHistory
 
 import cv2
 import numpy as np
@@ -52,8 +53,8 @@ from main_4 import (
     apply_pedal_interlock,
 )
 
-LANE_FRAME_SIZE = (640, 480)   # camera bird's-eye: cỡ của GroundCalibration
-ROAD_FRAME_SIZE = (640, 360)   # camera nhìn đường: 16:9, ObstacleDetector tự đưa về 1280x720
+LANE_FRAME_SIZE = (640, 480)   # camera làn đã khử méo: cỡ GroundCalibration
+ROAD_FRAME_SIZE = (640, 480)   # camera nhìn đường: đúng cỡ gửi từ Jetson; YOLO tự resize
 VISION_TIMEOUT_S = 0.5         # kết quả ảnh cũ hơn mức này -> coi như mất camera đó
 NO_OBSTACLE_M = 2.5            # khoảng cách đưa planner khi không thấy vật cản (như bản cũ)
 MAX_CONTROL_DT_S = 0.1         # chặn bước tích phân nếu thread điều khiển bị trễ bất thường
@@ -132,50 +133,6 @@ class JetsonSender:
         self.server.close()
 
 
-class FrameReceiver:
-    """Nhận ảnh JPEG qua UDP (mỗi gói một ảnh, từ pi5/pi_bridge.py), luôn trả ảnh MỚI NHẤT. Mỗi camera một receiver.
-
-    Camera gửi 30 ảnh/s, vòng ảnh (YOLO trên CPU) chỉ xử lý được ~5-12 ảnh/s nên các gói dồn lại trong buffer socket
-    (4 MB ~ 100 ảnh). Đọc lần lượt từng gói thì ảnh đang xử lý cũ dần tới vài giây. Ở đây mỗi lần đọc hết các gói
-    đang chờ và chỉ giữ gói cuối (giống wheel_pedal_bridge.py chỉ giữ dòng Serial cuối).
-    """
-
-    WAIT_S = 0.1
-
-    def __init__(self, port, frame_size):
-        self.frame_size = frame_size
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
-        self.sock.bind(("0.0.0.0", port))
-        self.skipped = 0  # tổng số ảnh cũ đã bỏ qua
-
-    def latest(self):
-        """(ảnh BGR cỡ frame_size, thời điểm nhận) hoặc (None, None) nếu không có ảnh hợp lệ trong WAIT_S."""
-        self.sock.settimeout(self.WAIT_S)
-        try:
-            packet, _ = self.sock.recvfrom(65535)
-        except (socket.timeout, ConnectionResetError):
-            return None, None
-        self.sock.setblocking(False)
-        while True:
-            try:
-                packet, _ = self.sock.recvfrom(65535)
-                self.skipped += 1
-            except (BlockingIOError, ConnectionResetError):
-                break
-        t_recv = time.perf_counter()
-
-        frame = cv2.imdecode(np.frombuffer(packet, dtype=np.uint8), cv2.IMREAD_COLOR)
-        if frame is None:
-            return None, None
-        if (frame.shape[1], frame.shape[0]) != self.frame_size:
-            frame = cv2.resize(frame, self.frame_size)
-        return frame, t_recv
-
-    def close(self):
-        self.sock.close()
-
-
 class RoadResult(NamedTuple):
     """Kết quả mới nhất của vòng YOLO (camera nhìn đường). Thay cả object một lần nên không cần khoá."""
 
@@ -183,10 +140,11 @@ class RoadResult(NamedTuple):
     distances: dict  # {"xe_may": m, "nguoi_di_bo": m, "o_to": m}, -1 = không có vật
     proc_ms: float
     count: int  # số ảnh đã xử lý (để tính fps)
+    frame_id: Optional[int] = None
 
 
 class LaneResult(NamedTuple):
-    """Kết quả mới nhất của vòng làn (camera bird's-eye)."""
+    """Kết quả mới nhất của vòng làn (camera làn đã khử méo)."""
 
     t: float
     plan_dir: Optional[str]  # "KEEP" / "LEFT" / "RIGHT", None nếu planner không chọn quỹ đạo nào
@@ -194,6 +152,9 @@ class LaneResult(NamedTuple):
     lor: float
     proc_ms: float
     count: int
+    frame_id: Optional[int] = None
+    road_frame_id: Optional[int] = None
+    sync_skew_s: Optional[float] = None
 
 
 # --- 6. HỆ THỐNG ĐIỀU KHIỂN TRUNG TÂM ---
@@ -233,6 +194,9 @@ class AutonomousMasterController:
         self.sender = None if args.no_send else JetsonSender(port=getattr(args, "tcp_port", 6000))
 
         # Trạng thái dùng chung giữa các vòng lặp (mỗi biến một vòng ghi, thay cả object nên không cần khoá)
+        self.road_history = ResultHistory(getattr(args, "max_frame_skew", 0.1), VISION_TIMEOUT_S)
+        self.lane_receiver = None
+        self.road_receiver = None
         self.road_result = None   # RoadResult mới nhất: vòng YOLO ghi
         self.lane_result = None   # LaneResult mới nhất: vòng làn ghi
         self.yolo_view = None     # ảnh YOLO đã vẽ hộp, vòng làn (thread chính) hiển thị
@@ -245,14 +209,15 @@ class AutonomousMasterController:
         self._last_status = None  # (thời điểm, số ảnh làn, số ảnh YOLO, số dòng Serial) lần in trước
 
     # ----------------------------- VÒNG YOLO (camera nhìn đường, thread riêng) -----------------------------
-    def road_step(self, raw_frame: np.ndarray, t_now: float, draw: bool = True):
+    def road_step(self, raw_frame: np.ndarray, t_now: float, draw: bool = True, frame_id=None):
         """YOLO + khoảng cách trên ảnh camera nhìn đường (giữ nguyên thuật toán), công bố cho vòng làn và vòng điều
         khiển. Trả về ảnh đã vẽ hộp (draw=True) hoặc None."""
         t0 = time.perf_counter()
         distances, yolo_frame = self.detector.process_frame(raw_frame, t_now)
         self._road_frames += 1
         self.road_result = RoadResult(t=t_now, distances=distances, proc_ms=(time.perf_counter() - t0) * 1000.0,
-                                      count=self._road_frames)
+                                      count=self._road_frames, frame_id=frame_id)
+        self.road_history.add(self.road_result)
         return self.detector.draw_bboxes(yolo_frame) if draw else None
 
     def _road_loop(self, receiver: "FrameReceiver", draw: bool):
@@ -260,7 +225,7 @@ class AutonomousMasterController:
             while not self.stop_event.is_set():
                 frame, t_recv = receiver.latest()
                 if frame is not None:
-                    view = self.road_step(frame, t_recv, draw)
+                    view = self.road_step(frame, t_recv, draw, frame_id=receiver.last_frame_id)
                     if draw:
                         self.yolo_view = view
         except Exception:
@@ -268,23 +233,28 @@ class AutonomousMasterController:
             print("[YOLO] Vong YOLO bi loi -> dung chuong trinh")
             self.stop_event.set()
 
-    # ----------------------------- VÒNG LÀN (camera bird's-eye, thread chính) -----------------------------
+    # ----------------------------- VÒNG LÀN (camera làn đã khử méo, thread chính) -----------------------------
     def front_obstacle(self, now: float):
         """(khoảng cách vật cản gần nhất phía trước, tuổi số đo) cho planner, từ kết quả YOLO còn mới."""
-        road = self.fresh_road(now)
-        if road is None:
-            return NO_OBSTACLE_M, 0.0
-        valid = [d for d in road.distances.values() if d >= 0]
-        return (min(valid) if valid else NO_OBSTACLE_M), max(0.0, now - road.t)
+        road = self.road_history.pick(now)
+        return self._front_distance(road, now)
 
-    def lane_step(self, raw_frame: np.ndarray, t_now: float, draw: bool = True):
+    @staticmethod
+    def _front_distance(road, lane_t):
+        if road is None:
+            return None, 0.0
+        valid = [d for d in road.distances.values() if np.isfinite(d) and d >= 0]
+        return (min(valid) if valid else NO_OBSTACLE_M), lane_t - road.t
+
+    def lane_step(self, raw_frame: np.ndarray, t_now: float, draw: bool = True, frame_id=None):
         """LDWS -> planner trên ảnh bird's-eye (giữ nguyên thuật toán), khoảng cách vật cản lấy từ vòng YOLO.
         Trả về (warn_res, plan_res, 3 ảnh hiển thị hoặc None khi draw=False)."""
         t0 = time.perf_counter()
-        geom, images = self.vision.process_raw_frame(raw_frame, t_now)
+        geom, images = self.vision.process_undistorted(raw_frame, t_now)
         warn_res = self.warning.update(geom)
 
-        front_dist, dist_age = self.front_obstacle(t_now)
+        matched_road = self.road_history.pick(t_now)
+        front_dist, dist_age = self._front_distance(matched_road, t_now)
         plan_res = self.planner.propose(
             bev=images.bev,
             front_distance_m=front_dist,
@@ -299,6 +269,9 @@ class AutonomousMasterController:
             lor=warn_res.lor,
             proc_ms=(time.perf_counter() - t0) * 1000.0,
             count=self._lane_frames,
+            frame_id=frame_id,
+            road_frame_id=matched_road.frame_id if matched_road else None,
+            sync_skew_s=dist_age if matched_road else None,
         )
 
         if not draw:
@@ -311,12 +284,12 @@ class AutonomousMasterController:
     def fresh_road(self, now: float):
         """Kết quả YOLO còn mới, hoặc None nếu chưa có / cũ hơn VISION_TIMEOUT_S (mất camera nhìn đường)."""
         res = self.road_result
-        return None if res is None or now - res.t > VISION_TIMEOUT_S else res
+        return None if res is None or not 0 <= now - res.t <= VISION_TIMEOUT_S else res
 
     def fresh_lane(self, now: float):
-        """Kết quả làn còn mới, hoặc None (mất camera bird's-eye)."""
+        """Kết quả làn còn mới, hoặc None (mất camera làn đã khử méo)."""
         res = self.lane_result
-        return None if res is None or now - res.t > VISION_TIMEOUT_S else res
+        return None if res is None or not 0 <= now - res.t <= VISION_TIMEOUT_S else res
 
     def control_step(self, pedal_data: tuple, road: Optional[RoadResult], lane: Optional[LaneResult]):
         """Phần điều khiển của process_step cũ (giữ nguyên logic). road / lane: kết quả còn mới của từng camera,
@@ -352,6 +325,7 @@ class AutonomousMasterController:
 
     def start(self, road_receiver: Optional["FrameReceiver"] = None, draw: bool = True):
         """Chạy vòng điều khiển 50 Hz và (nếu có road_receiver) vòng YOLO, mỗi vòng một thread."""
+        self.road_receiver = road_receiver
         self._control_thread = threading.Thread(target=self._control_loop, name="control-50Hz", daemon=True)
         self._control_thread.start()
         if road_receiver is not None:
@@ -410,6 +384,18 @@ class AutonomousMasterController:
             txt = f"{fps:4.1f} fps, xu ly {res.proc_ms:.0f} ms"
             return txt + (" (MAT CAMERA)" if fresh is None else "")
 
+        for name, rx in (("lane", self.lane_receiver), ("road", self.road_receiver)):
+            if rx is not None:
+                st = rx.stats()
+                age = st['last_frame_age_s']
+                age_text = f"{age:.3f}s" if age is not None else "--"
+                print(f"[RX {name}] packets={st['packets']} assembled={st['assembled']} "
+                      f"decoded={st['decoded']} delivered={st['delivered']} id={st['last_frame_id']} "
+                      f"age={age_text} invalid={st['invalid']} size_errors={st['size_errors']} "
+                      f"source={st['last_source']}", flush=True)
+        if lane is not None:
+            print(f"[SYNC] lane_id={lane.frame_id} road_id={lane.road_frame_id} "
+                  f"skew_s={lane.sync_skew_s} status={'PAIRED' if lane.road_frame_id is not None else 'UNPAIRED'}")
         lor = f"{lane.lor:.2f}" if lane else "--"
         plan = (lane.plan_dir or lane.plan_status) if lane else "--"
         car = "da ket noi" if self.sender and self.sender.connected else "chua ket noi"
@@ -434,13 +420,20 @@ class AutonomousMasterController:
 def main():
     parser = argparse.ArgumentParser(description="He thong Xe Dieu Khien - HUST Robotics 2026")
     parser.add_argument("--serial-port", default="COM7", help="Cong Serial noi Arduino (ban dap, vo lang)")
-    parser.add_argument("--lane-port", type=int, default=7000, help="Port UDP anh camera bird's-eye (giu/chuyen lan)")
+    parser.add_argument("--lane-port", type=int, default=7000, help="Port UDP anh camera làn đã khử méo (giu/chuyen lan)")
     parser.add_argument("--road-port", type=int, default=7001, help="Port UDP anh camera nhin duong (YOLO)")
     parser.add_argument("--tcp-port", type=int, default=6000, help="Port TCP cho xe ket noi de nhan lenh @vcb")
     parser.add_argument("--target-speed", type=float, default=0.3, help="Toc do muc tieu m/s (cho planner)")
     parser.add_argument("--no-send", action="store_true", help="Tat gui lenh TCP")
     parser.add_argument("--no-show", action="store_true", help="Tat hien thi do hoa OpenCV")
+    parser.add_argument("--max-frame-skew", type=float, default=0.1,
+                        help="Max causal lane/road receive-time skew in seconds (0, 0.5]")
+    parser.add_argument("--source-ip", help="Only accept UDP frames from this vehicle IPv4 address")
     args = parser.parse_args()
+    if not 0 < args.max_frame_skew <= VISION_TIMEOUT_S:
+        parser.error("--max-frame-skew must be in (0, 0.5]")
+    if args.lane_port == args.road_port:
+        parser.error("Camera ports must be different")
 
     try:
         pedals = PedalSerialReader(args.serial_port)
@@ -453,8 +446,9 @@ def main():
 
     show = not args.no_show
     master = AutonomousMasterController(args, pedals)
-    lane_rx = FrameReceiver(args.lane_port, LANE_FRAME_SIZE)
-    road_rx = FrameReceiver(args.road_port, ROAD_FRAME_SIZE)
+    lane_rx = FrameReceiver(args.lane_port, LANE_FRAME_SIZE, source_ip=args.source_ip)
+    road_rx = FrameReceiver(args.road_port, ROAD_FRAME_SIZE, source_ip=args.source_ip)
+    master.lane_receiver = lane_rx
     master.start(road_rx, draw=show)
 
     print("\n[HUST ROBOTICS] HE THONG MASTER DA SAN SANG!")
@@ -466,7 +460,7 @@ def main():
         while not master.stop_event.is_set():
             frame, t_recv = lane_rx.latest()   # chờ tối đa 0.1 s, nên ảnh YOLO vẫn được vẽ khi mất camera làn
             if frame is not None:
-                _, _, views = master.lane_step(frame, t_recv, draw=show)
+                _, _, views = master.lane_step(frame, t_recv, draw=show, frame_id=lane_rx.last_frame_id)
                 if show:
                     f_cam, f_ldws, f_plan = views
                     cv2.imshow("2. LDWS Camera Overlay", f_cam)

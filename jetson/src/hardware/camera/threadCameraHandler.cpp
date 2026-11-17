@@ -130,7 +130,8 @@ void ThreadCameraHandler::try_open(CameraSource& cam) {
     if (!cam.capture.open(cam.source, apiPreference_) || !cam.capture.isOpened()) {
         if (cam.errorLimiter.allow()) {
             logger_ << "[CameraHandler] ERROR: Cannot open " << cam.name << " source '" << cam.source
-                    << "' (check the pipeline and that OpenCV was built with GStreamer)\n";
+                    << "' (check the pipeline and that OpenCV was built with GStreamer; for libcamerasrc, "
+                       "camera-name must match 'rpicam-hello --list-cameras' exactly)\n";
         }
         return;
     }

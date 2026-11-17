@@ -26,7 +26,7 @@ namespace network {
 // Subscribe (receiver "UdpServer"): CameraFrame, LaneCameraFrame (ảnh lấy từ FrameBuffer), CurrentSpeed, Speed,
 // ImuData, Steer. Bật/tắt do ThreadNetworkHandler gọi set_subscribed() + pause()/resume().
 //
-// Ảnh: giữ nguyên kích thước (cam người lái 960x540, cam bám làn ĐÃ NẮN MÉO 640x480), nén JPEG, cắt gói rồi gửi. Mỗi
+// Ảnh: giữ nguyên kích thước (cam người lái theo pipeline trong main.cpp, cam bám làn ĐÃ NẮN MÉO 640x480), nén JPEG, cắt gói rồi gửi. Mỗi
 // luồng ảnh tới một cổng riêng của client, có frameId riêng. main.py trên PC ghép gói, dò làn trên ảnh cam bám làn
 // (không khử méo lại) và hiện cả hai ảnh.
 // Định dạng gói (big-endian): [frameId u32][chunkIndex u16][totalChunks u16][payload ≤ 1300 byte].

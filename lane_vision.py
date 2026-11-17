@@ -1,6 +1,6 @@
 """Phần 1 — xử lý ảnh: từ frame camera tính các thông số hình học của làn tại đầu xe.
 
-Khử méo -> Bird's-Eye View (homography mặt đường) -> mask vạch trắng (HSV + Top-Hat + lọc hình thái) -> dò vạch (quanh
+Ảnh vào đã được Jetson khử méo (ThreadCameraHandler) -> Bird's-Eye View (homography mặt đường) -> mask vạch trắng (HSV + Top-Hat + lọc hình thái) -> dò vạch (quanh
 vạch frame trước hoặc cửa sổ trượt) -> khớp đa thức -> ngoại suy về đầu xe -> bám vạch bằng bộ lọc trượt. Kết quả mỗi
 frame là một LaneGeometry (vị trí hai vạch, bề rộng làn, độ lệch tâm, khoảng hở, góc lệch) dùng để ghi log và làm đầu
 vào cho phần 2 (lane_warning.py). Phần này không biết gì về ngưỡng cảnh báo; nó chỉ vẽ màu theo mức mà phần 2 đưa vào.
@@ -32,7 +32,7 @@ class LaneGeometry:
     clr_left_cm: float = None  # khoảng hở góc trước-trái tới mép trong vạch trái (âm: đã đè vạch)
     clr_right_cm: float = None
     angle_deg: float = None  # góc đầu xe so với làn, dương: chĩa sang trái (chỉ để hiển thị)
-    proc_ms: float = 0.0  # thời gian xử lý ảnh của frame (không gồm khử méo và vẽ)
+    proc_ms: float = 0.0  # thời gian xử lý ảnh của frame (không gồm vẽ)
 
     @property
     def lane_width_cm(self) -> float:
@@ -40,7 +40,7 @@ class LaneGeometry:
 
 
 class VisionImages(NamedTuple):
-    undistorted: np.ndarray  # ảnh camera đã khử méo
+    undistorted: np.ndarray  # ảnh camera đã khử méo (Jetson khử)
     bev: np.ndarray  # ảnh Bird's-Eye View
     mask: np.ndarray  # mask nhị phân vạch trắng trên BEV
 
@@ -124,26 +124,15 @@ class LaneVision:
         # 1. Tính các ngưỡng hình học từ make_thresholds() trong laneDetector.cpp
         self._make_thresholds()
 
-        # 2. Khởi tạo bản đồ khử méo ống kính (Undistort Map)
-        self.map1, self.map2 = cv2.initUndistortRectifyMap(
-            self.calib.camera_matrix,
-            self.calib.dist_coeffs,
-            None,
-            self.calib.camera_matrix,
-            (self.w, self.h),
-            cv2.CV_16SC2,
-        )
-
-        # 3. Khởi tạo ma trận IPM và ma trận chuyển đổi BEV <-> Mặt đường (m)
+        # 2. Khởi tạo ma trận IPM và ma trận chuyển đổi BEV <-> Mặt đường (m). Không khử méo ở đây: Jetson gửi ảnh
+        # đã khử méo bằng K và hệ số méo của nó
         self._init_ipm()
 
-        # 4. Tạo mặt nạ vùng nhìn thấy hợp lệ (visible_ trong laneDetector.cpp; hiện chưa dùng)
+        # 3. Tạo mặt nạ vùng nhìn thấy hợp lệ (visible_ trong laneDetector.cpp; hiện chưa dùng). Coi cả khung ảnh đã
+        # khử méo là thấy được (viền đen do khử méo không bị trừ ra)
         white = np.full((self.h, self.w), 255, dtype=np.uint8)
-        undist_w = cv2.remap(
-            white, self.map1, self.map2, cv2.INTER_NEAREST
-        )
         vis_raw = cv2.warpPerspective(
-            undist_w, self.ipm_matrix, (self.w, self.h), flags=cv2.INTER_NEAREST
+            white, self.ipm_matrix, (self.w, self.h), flags=cv2.INTER_NEAREST
         )
         shrink_k = cv2.getStructuringElement(
             cv2.MORPH_RECT,
@@ -557,15 +546,8 @@ class LaneVision:
         return geom
 
     # -----------------------------------------------------------------
-    # BƯỚC 5: XỬ LÝ FRAME THÔ 640x480 & VẼ HIỂN THỊ KÉP (CAMERA + BEV)
+    # BƯỚC 5: XỬ LÝ FRAME ĐÃ KHỬ MÉO 640x480 & VẼ HIỂN THỊ KÉP (CAMERA + BEV)
     # -----------------------------------------------------------------
-    def process_raw_frame(self, raw_bgr: np.ndarray, t=None):
-        """Frame thô -> (LaneGeometry, VisionImages). t: thời điểm frame (s, mặc định đồng hồ máy)."""
-        if t is None:
-            t = time.perf_counter()
-        undistorted = cv2.remap(raw_bgr, self.map1, self.map2, cv2.INTER_LINEAR)
-        return self.process_undistorted(undistorted, t)
-
     def process_undistorted(self, undistorted: np.ndarray, t: float):
         """Ảnh đã khử méo -> (LaneGeometry, VisionImages). t truyền từ ngoài vào để chạy lại / giả lập cho kết quả
         giống hệt chạy thật (bộ lọc trượt theo t, không đọc đồng hồ máy)."""

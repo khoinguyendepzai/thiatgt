@@ -19,7 +19,7 @@ Báo cáo đầy đủ (lý thuyết, chứng minh, tiêu chí, kết quả): [B
 ## 1. Xử lý ảnh (tóm tắt)
 
 ```
-ảnh JPEG 640x480 (UDP :7000) → khử méo → Bird's-Eye View (homography mặt đường)
+ảnh JPEG 640x480 đã khử méo trên Jetson (UDP :7000) → Bird's-Eye View (homography mặt đường)
   → mask vạch trắng (HSV + Top-Hat + lọc hình thái) → dò vạch (cửa sổ trượt / quanh vạch frame trước)
   → khớp đa thức → ngoại suy vị trí vạch về đầu xe (x = 0.36 m) → bộ lọc trượt 0.15 s
   → y_L, y_R: vị trí tâm vạch trái / phải tại đầu xe (m, hệ toạ độ xe)
@@ -30,7 +30,7 @@ Gốc toạ độ ở tâm cầu sau, `x` hướng tới trước, `y` sang trá
 Code chia ba phần, ranh giới giữa chúng là thông số hình học `LaneGeometry`:
 
 ```
-main.py          thông số đầu vào (calib, sa bàn và xe, ISO) → nhận frame (UDP :7000 / video / ảnh) → ghi CSV
+main.py          thông số đầu vào (calib, sa bàn và xe, ISO) → nhận frame (UDP :7000 + :7001 / video / ảnh) → ghi CSV
    │ frame
    ▼
 lane_vision.py   phần 1: xử lý ảnh → LaneGeometry (y_L, y_R, bề rộng làn, độ lệch tâm, khoảng hở, góc lệch)
@@ -205,7 +205,7 @@ LOR 0.46 và cảnh báo lệch làn. Hình kết quả nằm trong [ket_qua/](k
 Python 3.11, `pip install opencv-python numpy`.
 
 ```bash
-python main.py                                        # nhận ảnh JPEG qua UDP 7000 (mỗi ảnh < 65 507 byte)
+python main.py                                        # cam bám làn (đã khử méo) UDP 7000, cam nhìn đường UDP 7001
 python main.py --video run.mp4 --csv ketqua.csv       # chạy lại video
 python main.py --images thu_muc_anh --fps 30 --no-show --csv ketqua.csv
 ```

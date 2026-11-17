@@ -1,7 +1,7 @@
-"""Tính homography calib mặt đường (kGroundCalibration trong main.cpp) từ các mốc đo trên sàn.
+"""Tính homography calib mặt đường (GroundCalibration.homography trong main.py, PC) từ các mốc đo trên sàn.
 
-Homography đổi pixel trên ảnh camera (test.jpg, phím s của braincar, 640x480) thành tọa độ mặt đường tính
-bằng mét, gốc ở giữa cầu sau, x hướng tới trước, y sang trái (pure_pursit.md mục 7.2 và 7.8).
+Homography đổi pixel trên ảnh camera ĐÃ KHỬ MÉO (test.jpg khử méo, phím s của braincar, 640x480) thành tọa độ mặt đường tính
+bằng mét, gốc ở giữa cầu sau, x hướng tới trước, y sang trái (hệ toạ độ xe của main.py).
 
 File mốc (CSV), mỗi dòng một mốc, dòng trống và dòng bắt đầu bằng # bị bỏ qua:
     # u, v (pixel trên test.jpg), x, y (m, đo từ giữa cầu sau)
@@ -10,7 +10,7 @@ File mốc (CSV), mỗi dòng một mốc, dòng trống và dòng bắt đầu 
 Cách dùng:
     python calib/calib_homography.py marks.csv [--image 640x480]
 
-Kết quả: sai số từng mốc (khớp và bỏ-ra), cảnh báo chiều trục, rồi dòng cv::Matx33d để dán vào main.cpp.
+Kết quả: sai số từng mốc (khớp và bỏ-ra), cảnh báo chiều trục, rồi ma trận dạng Python để dán vào main.py.
 Không muốn tra pixel tay: pick_marks.py cho click các mốc trên test.jpg, ghi file CSV này rồi gọi report().
 Chỉ cần numpy. Thông báo in ra không dấu để console nào cũng đọc được.
 """
@@ -134,15 +134,13 @@ def axis_warnings(H, pix):
     return warnings
 
 
-def cpp_literal(H):
-    rows = [", ".join(f"{H[i, j]: .9g}" for j in range(3)) for i in range(3)]
-    return ("    cv::Matx33d(" + rows[0] + ",\n"
-            "                " + rows[1] + ",\n"
-            "                " + rows[2] + "),")
+def py_literal(H):
+    """Ba dòng ma trận đúng chỗ thụt lề của GroundCalibration.homography trong main.py."""
+    return "\n".join("                [" + ", ".join(f"{H[i, j]:.9g}" for j in range(3)) + "]," for i in range(3))
 
 
 def report(pix, ground, width, height):
-    """Khớp H, in sai số từng mốc, cảnh báo và dòng cv::Matx33d; trả về H. Thoát nếu mốc không dùng được.
+    """Khớp H, in sai số từng mốc, cảnh báo và ma trận cho main.py; trả về H. Thoát nếu mốc không dùng được.
     pick_marks.py cũng gọi hàm này."""
     n = len(pix)
     if n < 4:
@@ -177,13 +175,13 @@ def report(pix, ground, width, height):
     if outside:
         print(f"CANH BAO: moc {outside} nam ngoai anh {width}x{height}")
 
-    print("\nDan vao kGroundCalibration trong main.cpp (thay ma tran toan 0):")
-    print(cpp_literal(H))
+    print("\nDan vao GroundCalibration.homography trong main.py (thay 3 dong cua np.array):")
+    print(py_literal(H))
     return H
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Tinh homography calib mat duong cho kGroundCalibration")
+    parser = argparse.ArgumentParser(description="Tinh homography calib mat duong cho main.py")
     parser.add_argument("marks", help="file CSV: u, v, x, y moi dong")
     parser.add_argument("--image", default="640x480", help="kich thuoc test.jpg, mac dinh 640x480")
     args = parser.parse_args()

@@ -1,7 +1,7 @@
 """Calib ống kính camera bird's-eye bằng bàn cờ: tìm cameraMatrix (fx, fy, cx, cy) và distCoeffs (k1, k2, p1, p2, k3)
-để chỉnh méo, rồi in ra hai dòng C++ dán vào kGroundCalibration trong main.cpp.
+để chỉnh méo, rồi in ra hai dòng C++ dán vào kCameraCalibration trong main.cpp.
 
-Chụp rồi tính (chạy trên Jetson, cần màn hình hoặc ssh -X, TẮT braincar trước vì camera không mở được hai lần):
+Chụp rồi tính (chạy trên xe Pi 5, cần màn hình hoặc ssh -X, TẮT braincar trước vì camera không mở được hai lần):
     python3 calib/calib_camera.py --cols 9 --rows 6 --square 25
 Chỉ tính lại từ ảnh đã chụp (không mở camera, chạy được trên PC sau khi scp thư mục ảnh về):
     python3 calib/calib_camera.py --cols 9 --rows 6 --square 25 --calib_only
@@ -19,13 +19,14 @@ vẫn tính từ các ảnh có sẵn. Muốn chụp lại từ đầu thì xoá
 
 Kết quả: in K, hệ số méo, sai số RMS, góc nhìn, sai số từng ảnh; ghi camera_calib.yaml (cv::FileStorage đọc được) và
 undistort_check.jpg (ảnh trước | sau chỉnh méo, đúng như C++ làm: ma trận mới = K). Cạnh bàn cờ phải thẳng ở ảnh sau.
-Cần numpy và opencv-python (trên Jetson: OpenCV có GStreamer). Thông báo in ra không dấu để console nào cũng đọc được.
+Cần numpy và opencv-python (trên xe: OpenCV có GStreamer). Thông báo in ra không dấu để console nào cũng đọc được.
 """
 
 import argparse
 import glob
 import os
 import re
+import subprocess
 import sys
 
 import cv2
@@ -33,18 +34,49 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-# Giữ giống kLaneCameraSource trong main.cpp: K và hệ số méo gắn với độ phân giải, sensor mode và flip-method của
-# pipeline này. Đổi một bên thì đổi bên kia và calib lại.
-LANE_CAMERA_SOURCE = (
-    "nvarguscamerasrc sensor-id=0 ! "
-    "video/x-raw(memory:NVMM), width=1920, height=1080, format=NV12, framerate=30/1 ! "
-    "nvvidconv flip-method=2 ! "
-    "video/x-raw, width=640, height=480, format=BGRx ! "
+# Pipeline giống main.cpp: K và hệ số méo gắn với độ phân giải, sensor mode (vùng cắt) và hướng xoay của pipeline này.
+# Đổi một bên thì đổi bên kia và calib lại. 960x540 (16:9) để libcamera chọn sensor mode 1920x1080 như pipeline
+# Jetson cũ, rồi kéo giãn về 640x480 (xem chú thích trong main.cpp).
+# Chọn camera như main.cpp: sensor N = camera thứ N của "rpicam-hello --list-cameras" (như sensor-id của
+# nvarguscamerasrc trên Jetson). Mặc định sensor 0 = cam bám làn (kLaneSensorId), đổi bằng --sensor.
+LANE_SENSOR_ID = 0
+CAMERA_PIPELINE = (
+    "video/x-raw, width=960, height=540, format=NV12, framerate=30/1 ! "
+    "videoscale add-borders=false ! "
+    "video/x-raw, width=640, height=480 ! "
     "videoconvert ! "
     "video/x-raw, format=BGR ! "
     "appsink drop=true max-buffers=1 sync=false"
 )
-CALIB_SIZE  = (640, 480)    # kGroundCalibration.imageSize trong main.cpp (ảnh bàn cờ chụp ở 960x540 trước 05/11/2026)
+
+
+def libcamera_cameras():
+    """camera-name theo thứ tự "rpicam-hello --list-cameras" (dòng "N : imx219 [...] (<tên>)"), giống
+    list_libcamera_cameras() trong main.cpp. Rỗng nếu không chạy được lệnh."""
+    try:
+        out = subprocess.run(["rpicam-hello", "--list-cameras"], capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    names = []
+    for line in (out.stdout + "\n" + out.stderr).splitlines():
+        m = re.match(r"\s*(\d+) : .*\((.*)\)\s*$", line)
+        if m and int(m.group(1)) == len(names):
+            names.append(m.group(2))
+    return names
+
+
+def lane_camera_source(sensor):
+    """Pipeline của sensor: "libcamerasrc camera-name=..." + CAMERA_PIPELINE. Thoát nếu không có sensor đó."""
+    names = libcamera_cameras()
+    if sensor < len(names):
+        return f'libcamerasrc camera-name="{names[sensor]}" ! ' + CAMERA_PIPELINE
+    if not names and sensor == 0:
+        return "libcamerasrc ! " + CAMERA_PIPELINE   # không liệt kê được: libcamerasrc mở camera đầu tiên
+    sys.exit(f"[calib_camera] ERROR: khong thay sensor {sensor} (rpicam-hello --list-cameras thay {len(names)} "
+             "camera). Kiem tra cap va dtoverlay trong /boot/firmware/config.txt")
+
+
+CALIB_SIZE  = (640, 480)    # kCameraCalibration.imageSize trong main.cpp (ảnh bàn cờ chụp ở 960x540 trước 05/11/2026)
 WINDOW      = "calib_camera"
 LIVE_SCALE  = 0.5           # dò bàn cờ trên ảnh thu nhỏ lúc xem trực tiếp cho mượt; lúc tính dò lại trên ảnh gốc
 BAD_IMAGE_PX = 1.0          # ảnh có sai số trên mức này (hoặc gấp 2 lần trung bình) bị đánh dấu chụp lại
@@ -115,7 +147,7 @@ def coverage_of(folder, pattern, size):
 def capture(args, pattern):
     """Chụp tới khi bấm q/ESC. Trả về True nếu dừng bình thường (tính tiếp), False nếu lỗi camera."""
     os.makedirs(args.dir, exist_ok=True)
-    cap = cv2.VideoCapture(args.source, cv2.CAP_GSTREAMER)
+    cap = cv2.VideoCapture(args.source or lane_camera_source(args.sensor), cv2.CAP_GSTREAMER)
     if not cap.isOpened():
         print("[calib_camera] ERROR: khong mo duoc camera. Da tat braincar chua? OpenCV co GStreamer khong?")
         return False
@@ -139,7 +171,7 @@ def capture(args, pattern):
             if coverage is None:
                 if size != CALIB_SIZE:
                     print(f"[calib_camera] WARNING: anh {size[0]}x{size[1]}, khac {CALIB_SIZE[0]}x{CALIB_SIZE[1]} "
-                          "cua kGroundCalibration")
+                          "cua kCameraCalibration")
                 coverage = coverage_of(args.dir, pattern, size)
 
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -224,7 +256,7 @@ def calibrate(args, pattern):
         return 1
     if size != CALIB_SIZE:
         print(f"[calib_camera] WARNING: anh {size[0]}x{size[1]} khac {CALIB_SIZE[0]}x{CALIB_SIZE[1]} cua "
-              "kGroundCalibration: so lieu duoi day KHONG dung cho main.cpp")
+              "kCameraCalibration: so lieu duoi day KHONG dung cho main.cpp")
 
     rms, K, dist, rvecs, tvecs = cv2.calibrateCamera(obj_points, img_points, size, None, None)
     dist = dist.ravel()[:5]
@@ -252,7 +284,7 @@ def calibrate(args, pattern):
     print(f"  HFOV, VFOV   = {hfov:.1f}, {vfov:.1f} do")
     print(f"  k1 k2 p1 p2 k3 = {k1:.6f} {k2:.6f} {p1:.6f} {p2:.6f} {k3:.6f}   (k1 < 0: meo thung)")
 
-    print("\n=== Dan vao kGroundCalibration trong main.cpp (thay 2 khoi 0.0 cua cameraMatrix va distCoeffs) ===")
+    print("\n=== Dan vao kCameraCalibration trong main.cpp (thay 2 khoi 0.0 cua cameraMatrix va distCoeffs) ===")
     print(f"    cv::Matx33d({fx:.6f}, 0.0, {cx:.6f},    // fx, 0, cx")
     print(f"                0.0, {fy:.6f}, {cy:.6f},    // 0, fy, cy")
     print("                0.0, 0.0, 1.0),")
@@ -286,7 +318,9 @@ def main():
     parser.add_argument("--square", type=float, default=25.0, help="canh mot o (mm), khong anh huong K va he so meo")
     parser.add_argument("--dir", default=os.path.join(HERE, "chessboard"), help="thu muc chi chua anh chup")
     parser.add_argument("--out", default=HERE, help="thu muc ghi camera_calib.yaml va undistort_check.jpg")
-    parser.add_argument("--source", default=LANE_CAMERA_SOURCE, help="pipeline GStreamer (mac dinh = kLaneCameraSource)")
+    parser.add_argument("--sensor", type=int, default=LANE_SENSOR_ID,
+                        help="sensor N = camera thu N cua rpicam-hello --list-cameras (mac dinh 0 = cam bam lan)")
+    parser.add_argument("--source", help="pipeline GStreamer tu viet (bo qua --sensor)")
     parser.add_argument("--calib_only", action="store_true", help="chi tinh tu anh da co, khong mo camera")
     args = parser.parse_args()
     pattern = (args.cols, args.rows)

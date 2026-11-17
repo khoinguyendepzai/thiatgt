@@ -1,4 +1,4 @@
-"""Chọn mốc calib mặt đường bằng chuột trên test.jpg, rồi tính kGroundCalibration (pure_pursit.md mục 7.8).
+"""Chọn mốc calib mặt đường bằng chuột trên test.jpg, rồi tính homography cho GroundCalibration trong main.py (PC).
 
 Thay cho bước tra pixel bằng Paint và gõ file CSV tay:
     python calib/pick_marks.py test.jpg marks.csv [--lane_width 0.43]
@@ -10,13 +10,13 @@ Trong cửa sổ ảnh:
 - z: xoá mốc vừa thêm | q hoặc ESC: xong.
 File CSV được ghi lại sau mỗi lần thêm/xoá. Chạy lại với file đã có thì các mốc cũ được giữ và vẽ lên ảnh, click để thêm.
 
-Khử méo: LaneDetector khử méo ảnh (cv::remap với cameraMatrix, distCoeffs của kGroundCalibration) trước IPM, nên
+Khử méo: xe khử méo ảnh cam bám làn (cv::remap với cameraMatrix, distCoeffs của kCameraCalibration) trước khi gửi, nên
 homography phải tính trên ảnh ĐÃ khử méo. test.jpg (phím s) là ảnh thô, nên trước khi chọn mốc script khử méo nó đúng
 như C++ (initUndistortRectifyMap với ma trận mới = cameraMatrix, rồi remap), lưu thêm <ảnh>_undist.jpg, và mọi toạ độ
 u, v trong CSV là toạ độ trên ảnh đã khử méo. Bộ số lấy từ main.cpp (mặc định, để luôn khớp với C++) hoặc từ
 camera_calib.yaml của calib_camera.py (--camera_calib). --no_undistort: dùng ảnh thô (khi main.cpp chưa có bộ số).
 
-Xong mà có từ 4 mốc: in kết quả như calib_homography.py (sai số từng mốc, dòng cv::Matx33d để dán vào main.cpp), rồi
+Xong mà có từ 4 mốc: in kết quả như calib_homography.py (sai số từng mốc, ma trận để dán vào GroundCalibration.homography trong main.py), rồi
 hiện và lưu <csv>_check.jpg: lưới mặt đường mỗi 10 cm đổi ngược lên ảnh (trục giữa xe màu đỏ, hai vạch của làn
 có xe nằm giữa màu vàng). Ma trận đúng thì lưới nằm phẳng trên sàn, khớp với các vạch thật.
 Cần numpy và opencv-python. Thông báo in ra không dấu để console nào cũng đọc được.
@@ -37,7 +37,7 @@ WINDOW      = "pick_marks"
 MAX_VIEW_W  = 1280   # ảnh hiển thị thu nhỏ cho vừa màn hình; toạ độ click được đổi về pixel ảnh gốc
 ZOOM        = 5      # ô phóng to: (2·ZOOM_HALF + 1)² pixel ảnh gốc quanh con trỏ, phóng ZOOM lần
 ZOOM_HALF   = 20
-CALIB_SIZE  = (640, 480)    # kGroundCalibration.imageSize trong main.cpp
+CALIB_SIZE  = (640, 480)    # kCameraCalibration.imageSize trong main.cpp
 MAIN_CPP    = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "main.cpp")
 UNDIST_TAG  = "anh da khu meo"   # có trong dòng đầu CSV khi u, v là toạ độ trên ảnh đã khử méo
 
@@ -70,20 +70,22 @@ def save_marks(path, marks, undistorted):
 
 # ===================================== KHỬ MÉO ======================================
 def lens_from_main_cpp(path):
-    """(K, dist) trong kGroundCalibration của main.cpp: dòng cv::Matx33d(...) có chú thích "fx, 0, cx" và dòng
-    cv::Vec<double, 5>(...). None nếu không thấy, hoặc fx/fy còn bằng 0 (chưa calib: C++ không khử méo)."""
+    """(K, dist) trong kCameraCalibration của main.cpp: cv::Matx33d(...) có dạng ma trận nội camera
+    [fx 0 cx; 0 fy cy; 0 0 1] (không lẫn với homography) và cv::Vec<double, 5>(...). None nếu không thấy, hoặc fx/fy
+    còn bằng 0 (chưa calib: xe không khử méo)."""
     with open(path, encoding="utf-8") as f:
-        text = f.read()
-    m = re.search(r"cv::Matx33d\(([^)]*fx, 0, cx[^)]*)\)", text)
-    d = re.search(r"cv::Vec<double,\s*5>\(([^)]*)\)", text)
-    if not m or not d:
-        return None
+        text = re.sub(r"//[^\n]*", "", f.read())
     num = r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?"
-    k_vals = [float(t) for t in re.findall(num, re.sub(r"//[^\n]*", "", m.group(1)))]
-    d_vals = [float(t) for t in re.findall(num, d.group(1))]
-    if len(k_vals) != 9 or len(d_vals) != 5:
+    K = None
+    for m in re.finditer(r"cv::Matx33d\(([^)]*)\)", text):
+        vals = [float(t) for t in re.findall(num, m.group(1))]
+        if len(vals) == 9 and vals[1] == vals[3] == vals[6] == vals[7] == 0 and vals[8] == 1:
+            K = np.array(vals).reshape(3, 3)
+            break
+    d = re.search(r"cv::Vec<double,\s*5>\(([^)]*)\)", text)
+    d_vals = [float(t) for t in re.findall(num, d.group(1))] if d else []
+    if K is None or len(d_vals) != 5:
         return None
-    K = np.array(k_vals).reshape(3, 3)
     if K[0, 0] <= 0 or K[1, 1] <= 0:
         return None
     return K, np.array(d_vals)
@@ -102,7 +104,7 @@ def lens_from_yaml(path):
 
 
 def undistort(image, K, dist):
-    """Giống LaneDetector: initUndistortRectifyMap với ma trận mới = K, rồi remap (ảnh cùng cỡ, cùng K)."""
+    """Giống CameraUndistorter trên xe: initUndistortRectifyMap với ma trận mới = K, rồi remap (ảnh cùng cỡ, cùng K)."""
     size = (image.shape[1], image.shape[0])
     map1, map2 = cv2.initUndistortRectifyMap(K, dist, None, K, size, cv2.CV_16SC2)
     return cv2.remap(image, map1, map2, cv2.INTER_LINEAR)
@@ -260,7 +262,7 @@ def pick(image, marks, csv_path, undistorted):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Click cac moc calib tren test.jpg roi tinh kGroundCalibration")
+    parser = argparse.ArgumentParser(description="Click cac moc calib tren test.jpg roi tinh homography cho main.py")
     parser.add_argument("image", help="anh camera luu bang phim s cua braincar (test.jpg)")
     parser.add_argument("marks", help="file CSV u, v, x, y: tao moi hoac them vao file da co")
     parser.add_argument("--lane_width", type=float, default=0.43, help="be rong lan (m, giua tam hai vach; mep trong 0.40 + vach 0.03) de ve vach tren anh kiem tra")
@@ -274,7 +276,7 @@ def main():
     if image is None:
         sys.exit(f"Khong doc duoc anh {args.image}")
     if (image.shape[1], image.shape[0]) != CALIB_SIZE:
-        print(f"CANH BAO: anh {image.shape[1]}x{image.shape[0]}, kGroundCalibration can anh "
+        print(f"CANH BAO: anh {image.shape[1]}x{image.shape[0]}, kCameraCalibration can anh "
               f"{CALIB_SIZE[0]}x{CALIB_SIZE[1]} (anh camera luu bang phim s, khong phai anh bird's-eye)")
 
     undistorted = not args.no_undistort

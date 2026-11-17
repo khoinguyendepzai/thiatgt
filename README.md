@@ -218,10 +218,11 @@ CSV ghi từng frame:
 
 Ô trống nghĩa là chưa bám được vạch nào. Bấm `Space` để tạm dừng, `q`/`ESC` để thoát.
 
-**Calib** (chi tiết trong docstring của từng script trong [calib/](calib/)):
-- `calib_camera.py` tính K và hệ số méo từ ảnh bàn cờ.
-- `pick_marks.py`: click các mốc trên sàn để tính homography (luôn truyền `--camera_calib`).
-- Chép kết quả vào `GroundCalibration` trong `main.py`.
+**Calib** (chi tiết trong docstring của từng script trong [jetson/calib/](jetson/calib/)):
+- `calib_camera.py` (chạy trên xe, tắt `braincar` trước) tính K và hệ số méo từ ảnh bàn cờ; chọn camera theo sensor
+  như `jetson/main.cpp` (`--sensor`, mặc định 0 = cam bám làn). Chép K vào `kCameraCalibration` trong `jetson/main.cpp`.
+- `pick_marks.py`: click các mốc trên sàn (trên `test.jpg`, phím `s` của `braincar`) để tính homography. K để khử méo
+  đọc từ `jetson/main.cpp`. Chép ma trận in ra vào `GroundCalibration.homography` trong `main.py`.
 - Kiểm tra: đặt xe thẳng giữa làn; trên BEV hai vạch phải song song và làn rộng khoảng 43 cm.
 
 ## 8. Tài liệu tham khảo
@@ -245,7 +246,7 @@ File PDF của các bài báo và của ISO không đưa vào repo.
 main.py          # thông số đầu vào, nhận frame (UDP / video / ảnh), nối hai phần, ghi CSV
 lane_vision.py   # phần 1: xử lý ảnh → thông số hình học của làn, vẽ hiển thị
 lane_warning.py  # phần 2: LOR → ngưỡng, debounce, hysteresis → mức cảnh báo
-calib/           # script calib ống kính và homography, ảnh và mốc calib mẫu
+jetson/          # chương trình xe (C++): camera, khử méo, UDP, serial; jetson/calib/: script calib, ảnh và mốc mẫu
 ket_qua/         # hình kết quả
 BaoCao_LDWS.pdf  # báo cáo chi tiết
 CLAUDE.md        # ghi chú kỹ thuật cho Claude Code

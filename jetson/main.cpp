@@ -60,8 +60,8 @@ static const std::string kCameraPipeline =
 // Calib ống kính cam bám làn ở 640x480 (homography nằm ở PC, GroundCalibration trong main.py)
 static const perception::CameraCalibration kCameraCalibration{
     cv::Size(640, 480),
-    cv::Matx33d(512.492640, 0.0, 287.186733,
-                0.0, 687.516488, 284.552142,
+    cv::Matx33d(512.492640, 0.0, 287.186733,    // fx, 0, cx
+                0.0, 687.516488, 284.552142,    // 0, fy, cy
                 0.0, 0.0, 1.0),
     cv::Vec<double, 5>(-0.35453198, 0.18076870, -0.00151746, 0.00140839, -0.06370173),   // k1, k2, p1, p2, k3
 };

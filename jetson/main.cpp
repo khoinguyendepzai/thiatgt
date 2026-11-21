@@ -37,25 +37,26 @@ using utils::messages::FrameInfo;
 using utils::messages::MessageHandlerSubscriber;
 using utils::messages::MessageName;
 
-// Chương trình xe: 2 camera (cam bám làn nắn méo + cam người lái) -> UDP về PC (main.py dò làn), TCP, serial, state
-// machine. Phím (terminal hoặc cửa sổ): q / ESC thoát (về STOP), s lưu test.jpg (ảnh thô cam bám làn) + road.jpg,
-// 1..4 đổi state (DEFAULT, AUTO, MANUAL, STOP).
-// Chạy: ./braincar [<ip nhận UDP | any> [<ip server TCP>]]
+// Chương trình xe (Jetson): 2 camera (cam bám làn nắn méo + cam nhìn đường) -> UDP về PC (main_master.py), TCP nhận
+// lệnh @vcb, serial xuống NUCLEO, state machine. Phím (terminal hoặc cửa sổ): q / ESC thoát (về STOP), s lưu test.jpg
+// (ảnh thô cam bám làn) + road.jpg, 1..4 đổi state (DEFAULT, AUTO, MANUAL, STOP).
+// Chạy: ./braincar [<ip PC nhận UDP | any> [<ip PC chạy server TCP>]]   (mặc định cả hai là kPcIp)
 
-// Sensor như "nvarguscamerasrc sensor-id=N" trên Jetson: sensor N = camera thứ N của "rpicam-hello --list-cameras".
-// Hai cửa sổ bị tráo ảnh thì đổi hai số này cho nhau.
+// sensor-id của nvarguscamerasrc: 0 = cổng CAM0, 1 = cổng CAM1 (Jetson Nano B01 / Xavier NX có 2 cổng; Nano A02 chỉ
+// có 1 cổng). Hai cửa sổ bị tráo ảnh thì đổi hai số này cho nhau. Đặt -1 để TẮT camera đó (board chỉ có 1 cổng,
+// chạy thử 1 cam): không thử mở, không làm chậm camera còn lại.
 static constexpr int kLaneSensorId = 0;   // cam bám làn
-static constexpr int kRoadSensorId = 1;   // cam người lái
+static constexpr int kRoadSensorId = 1;   // cam nhìn đường (YOLO)
 
-// Pipeline chung cho hai camera (sau dòng chọn sensor). Phải giữ đúng hình học lúc calib kCameraCalibration: xin
-// 960x540 để libcamera chọn sensor mode 1920x1080, rồi kéo giãn về 640x480 (vì vậy fx ≠ fy).
-static const std::string kCameraPipeline =
-    "video/x-raw, width=960, height=540, format=NV12, framerate=30/1 ! "
-    "videoscale add-borders=false ! "
-    "video/x-raw, width=640, height=480 ! "
-    "videoconvert ! "
-    "video/x-raw, format=BGR ! "
-    "appsink drop=true max-buffers=1 sync=false";
+// flip-method của nvvidconv: 0 = giữ nguyên, 2 = xoay 180° (cam lắp ngược). Phải giống FLIP_METHOD trong
+// calib/calib_camera.py: K và hệ số méo đo ở hướng nào thì chỉ đúng ở hướng đó (xoay 180° làm đổi cx, cy, p1, p2).
+static constexpr int kFlipMethod = 0;
+
+// Cỡ ảnh mỗi camera. Cam bám làn 640x480: đúng cỡ calib kCameraCalibration (ảnh 16:9 kéo giãn về 4:3, nên fx ≠ fy).
+// Cam nhìn đường 640x360 (giữ tỉ lệ 16:9): main_master.py nhận đúng cỡ này (ROAD_FRAME_SIZE); ảnh bị kéo giãn thì
+// chiều cao khung bao sai và khoảng cách D = f·H/h của YOLO sai theo.
+static constexpr int kLaneWidth = 640, kLaneHeight = 480;
+static constexpr int kRoadWidth = 640, kRoadHeight = 360;
 
 // Calib ống kính cam bám làn ở 640x480 (homography nằm ở PC, GroundCalibration trong main.py)
 static const perception::CameraCalibration kCameraCalibration{
@@ -66,12 +67,17 @@ static const perception::CameraCalibration kCameraCalibration{
     cv::Vec<double, 5>(-0.35453198, 0.18076870, -0.00151746, 0.00140839, -0.06370173),   // k1, k2, p1, p2, k3
 };
 
-// Cổng UDP phải khớp LANE_PORT / ROAD_PORT trong main.py
-static const std::string       kUdpClientIp   = "0.0.0.0";   // 0.0.0.0 / any = broadcast
+// IP của PC chạy main_master.py (xem bằng ipconfig trên PC). Gửi thẳng tới PC, KHÔNG broadcast: trên Wi-Fi gói broadcast
+// đi ở tốc độ cơ bản rất thấp, ảnh 2 camera cắt thành nhiều gói sẽ rớt gói liên tục và PC không ghép đủ ảnh nào.
+// TCP client không được để 0.0.0.0: Linux hiểu 0.0.0.0 là chính máy này, xe sẽ tự nối vào chính nó.
+static const std::string kPcIp = "192.168.1.8";
+
+// Cổng phải khớp --lane-port / --road-port / --tcp-port của main_master.py
+static const std::string       kUdpClientIp   = kPcIp;       // "any" / "0.0.0.0" = broadcast (không nên dùng)
 static constexpr std::uint16_t kUdpLanePort   = 7000;        // cam bám làn đã nắn méo
-static constexpr std::uint16_t kUdpClientPort = 7001;        // cam người lái
-static constexpr std::uint16_t kUdpTextPort   = 9000;        // telemetry text
-static const std::string       kTcpServerHost = "0.0.0.0";
+static constexpr std::uint16_t kUdpClientPort = 7001;        // cam nhìn đường
+static constexpr std::uint16_t kUdpTextPort   = 9000;        // telemetry text (main_master không nghe cổng này, vô hại)
+static const std::string       kTcpServerHost = kPcIp;
 static constexpr std::uint16_t kTcpServerPort = 6000;
 static const hardware::serialhandler::SerialParams kSerialParams{"/dev/ttyACM0", 115200};
 
@@ -81,37 +87,17 @@ static constexpr const char* kLaneCameraWindow = "Lane Camera (undistorted)";
 static std::atomic<bool> g_shutdownRequested{false};
 static void shutdown_signal_handler(int) { g_shutdownRequested.store(true); }
 
-// camera-name theo thứ tự của "rpicam-hello --list-cameras": dòng "N : imx219 [...] (<tên>)". Rỗng nếu không chạy được.
-static std::vector<std::string> list_libcamera_cameras() {
-    std::vector<std::string> names;
-    FILE* pipe = popen("rpicam-hello --list-cameras 2>&1", "r");
-    if (pipe == nullptr) return names;
-    char buffer[512];
-    while (std::fgets(buffer, sizeof(buffer), pipe) != nullptr) {
-        const std::string line(buffer);
-        const auto first = line.find_first_not_of(" \t");
-        const auto colon = line.find(" : ");
-        const auto open  = line.rfind('(');
-        const auto close = line.rfind(')');
-        if (first == std::string::npos || !std::isdigit(static_cast<unsigned char>(line[first]))
-            || colon == std::string::npos || open == std::string::npos || close == std::string::npos || close < open
-            || line.substr(first, colon - first) != std::to_string(names.size())) {
-            continue;   // không phải dòng camera (dòng mode, log...)
-        }
-        names.push_back(line.substr(open + 1, close - open - 1));
-    }
-    pclose(pipe);
-    return names;
-}
-
-// Pipeline của sensor N. Không có sensor này thì báo lỗi; ThreadCameraHandler sẽ thử mở lại, hệ thống vẫn chạy.
-static std::string camera_source(int sensorId, const std::vector<std::string>& names) {
-    const auto id = static_cast<std::size_t>(sensorId);
-    if (id < names.size()) return "libcamerasrc camera-name=\"" + names[id] + "\" ! " + kCameraPipeline;
-    if (names.empty() && sensorId == 0) return "libcamerasrc ! " + kCameraPipeline;   // camera đầu tiên
-    std::cerr << "[Main] ERROR: Khong thay sensor " << sensorId << " (rpicam-hello thay " << names.size()
-              << " camera). Kiem tra cap va dtoverlay trong /boot/firmware/config.txt\n";
-    return "libcamerasrc camera-name=\"sensor-" + std::to_string(sensorId) + "-not-found\" ! " + kCameraPipeline;
+// Pipeline GStreamer của một camera CSI trên Jetson. Xin sensor mode 1920x1080 (16:9, vùng cắt giữa cảm biến giống mode
+// 1920x1080 lúc calib), nvvidconv xoay + thu nhỏ bằng phần cứng, videoconvert BGRx -> BGR cho OpenCV.
+// sensorId < 0: chuỗi rỗng = camera bị tắt (ThreadCameraHandler không thử mở).
+static std::string camera_source(int sensorId, int width, int height) {
+    if (sensorId < 0) return "";
+    return "nvarguscamerasrc sensor-id=" + std::to_string(sensorId) + " ! "
+           "video/x-raw(memory:NVMM), width=1920, height=1080, format=NV12, framerate=30/1 ! "
+           "nvvidconv flip-method=" + std::to_string(kFlipMethod) + " ! "
+           "video/x-raw, width=" + std::to_string(width) + ", height=" + std::to_string(height) + ", format=BGRx ! "
+           "videoconvert ! video/x-raw, format=BGR ! "
+           "appsink drop=true max-buffers=1 sync=false";
 }
 
 // Ảnh hiện trong cửa sổ khi camera chưa có frame
@@ -162,17 +148,16 @@ int main(int argc, char** argv) {
     std::signal(SIGINT, shutdown_signal_handler);
     std::signal(SIGTERM, shutdown_signal_handler);
 
-    // Tắt log INFO của libcamera và WARN của OpenCV (camera thiếu thì thử mở lại mỗi giây, log rất dày).
-    // Đặt trước mọi lệnh OpenCV/camera: hai thư viện đọc biến môi trường ở lần dùng đầu tiên.
-    setenv("LIBCAMERA_LOG_LEVELS", "*:ERROR", 0);
+    // Tắt WARN của OpenCV (camera thiếu thì thử mở lại, log rất dày). Đặt trước mọi lệnh OpenCV: đọc ở lần dùng đầu.
     setenv("OPENCV_LOG_LEVEL", "ERROR", 0);
 
     const std::string udpClientIp   = (argc >= 2) ? argv[1] : kUdpClientIp;
     const std::string tcpServerHost = (argc >= 3) ? argv[2] : kTcpServerHost;
+    std::cout << "[Main] Anh UDP -> " << udpClientIp << " (cong " << kUdpLanePort << ", " << kUdpClientPort
+              << "), TCP server " << tcpServerHost << ':' << kTcpServerPort << '\n';
 
-    const std::vector<std::string> cameraNames = list_libcamera_cameras();
-    const std::string laneSource = camera_source(kLaneSensorId, cameraNames);
-    const std::string roadSource = camera_source(kRoadSensorId, cameraNames);
+    const std::string laneSource = camera_source(kLaneSensorId, kLaneWidth, kLaneHeight);
+    const std::string roadSource = camera_source(kRoadSensorId, kRoadWidth, kRoadHeight);
 
     // Hủy theo thứ tự ngược khai báo: gateway sống lâu nhất vì subscriber unsubscribe khi bị hủy
     utils::QueuesList queues = utils::create_default_queues_list();
@@ -210,11 +195,15 @@ int main(int argc, char** argv) {
     std::this_thread::sleep_for(100ms);
     sm.initialize_starting_mode();
 
-    // Luôn mở cửa sổ; chạy qua SSH (DISPLAY rỗng) thì hiện lên màn hình của Pi. Không mở được thì dùng phím terminal.
-    const char* display = std::getenv("DISPLAY");
-    if (display == nullptr || *display == '\0') setenv("DISPLAY", ":0", 1);
-    bool showWindows = true;
-    try {
+    // Chỉ mở cửa sổ khi có DISPLAY (chạy từ terminal trên màn hình Jetson, hoặc ssh -X / DISPLAY=:0 ./braincar).
+    // Không tự đặt DISPLAY=:0 như bản Pi: OpenCV của JetPack (GTK) gọi gtk_init(), không mở được màn hình là THOÁT luôn
+    // chương trình, không ném exception để bắt. Không có màn hình thì điều khiển bằng phím trong terminal.
+    const char* display     = std::getenv("DISPLAY");
+    bool        showWindows = display != nullptr && *display != '\0';
+    if (!showWindows) {
+        std::cout << "[Main] Khong co DISPLAY: chay khong cua so, bam phim trong terminal (1..4 doi state, q thoat).\n";
+    }
+    if (showWindows) try {
         for (const char* name : {kCameraWindow, kLaneCameraWindow}) {
             cv::namedWindow(name, cv::WINDOW_NORMAL);
             cv::resizeWindow(name, 960, 540);
@@ -241,7 +230,7 @@ int main(int argc, char** argv) {
         if (showWindows && Clock::now() >= nextNoSignal) {
             nextNoSignal = Clock::now() + 1s;
             if (!frames->latest().image) {
-                cv::imshow(kCameraWindow, no_signal_image("Cam nguoi lai (sensor " + std::to_string(kRoadSensorId) + ")"));
+                cv::imshow(kCameraWindow, no_signal_image("Cam nhin duong (sensor " + std::to_string(kRoadSensorId) + ")"));
             }
             if (!laneFrames->latest().image) {
                 cv::imshow(kLaneCameraWindow, no_signal_image("Cam bam lan (sensor " + std::to_string(kLaneSensorId) + ")"));

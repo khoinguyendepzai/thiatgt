@@ -50,6 +50,7 @@ private:
     void read_available();
     void process_data(const std::string& data);
     void send_queue(const std::string& buff);
+    void send_stop_command(const char* reason);   // tốc độ 0, lái thẳng, dir 0 (như pi_bridge khi mất lệnh)
 
     std::string host_;
     std::uint16_t port_;
@@ -69,8 +70,14 @@ private:
     std::atomic<bool> connected_{false};
     Clock::time_point nextAttempt_{};
 
+    // An toàn: NUCLEO giữ lệnh cuối cùng nhận được. Mất kết nối hoặc PC ngừng gửi @vcb quá kCommandTimeout thì gửi lệnh
+    // dừng một lần (main_master gửi 50 lần/s, nên 300 ms = ~15 lệnh liên tiếp bị mất).
+    Clock::time_point lastVcb_{};
+    bool              driving_ = false;   // đã nhận @vcb và chưa gửi lệnh dừng
+
     utils::RateLimiter errorLimiter_{utils::logcfg::kErrorCooldown};
 
+    static constexpr std::chrono::milliseconds kCommandTimeout{300};
     static constexpr std::chrono::seconds kReconnectInterval{1};
     static constexpr std::chrono::milliseconds kConnectTimeout{1000};
     static constexpr std::size_t kMaxBufferSize = 4096;

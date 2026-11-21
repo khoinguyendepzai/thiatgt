@@ -11,6 +11,7 @@ Chạy lại video hoặc thư mục ảnh đã ghi (thời gian lấy theo fps)
     python main.py --video run.mp4 --csv ketqua.csv
     python main.py --images thu_muc_anh --fps 30 --no-show --csv ketqua.csv
 """
+# hihi
 
 import argparse
 import csv

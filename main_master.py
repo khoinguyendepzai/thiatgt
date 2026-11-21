@@ -414,9 +414,8 @@ class AutonomousMasterController:
         res = self.lane_result
         return None if res is None or now - res.t > VISION_TIMEOUT_S else res
 
-    def control_step(self, pedal_data: tuple, road: Optional[RoadResult], lane: Optional[LaneResult]):
-        """Phần điều khiển của process_step cũ (giữ nguyên logic). road / lane: kết quả còn mới của từng camera,
-        None = mất camera đó."""
+    def control_step(self, pedal_data: tuple, road: Optional[RoadResult]):
+        """Tính lệnh xe từ thao tác người lái và khoảng cách vật cản."""
         enc, ga, lui, phanh, connected = pedal_data
         ga, lui, phanh = apply_pedal_interlock(ga, lui, phanh)
         drive_dir, changed = self.dir_selector.update(ga, lui, self.vehicle_ctrl.speed)
@@ -429,7 +428,6 @@ class AutonomousMasterController:
             distances = {"xe_may": CAMERA_LOST, "nguoi_di_bo": CAMERA_LOST, "o_to": CAMERA_LOST}
         else:
             distances = road.distances
-        plan_dir = lane.plan_dir if lane is not None else None
 
         sys_input = Input(
             encoder=enc, ga=ga, lui=lui, phanh=phanh, driveDir=drive_dir,
@@ -437,14 +435,7 @@ class AutonomousMasterController:
             distance_nguoi_di_bo=distances["nguoi_di_bo"],
             distance_o_to=distances["o_to"],
         )
-        sys_output = self.vehicle_ctrl.update(sys_input)
-
-        if plan_dir == "LEFT":
-            sys_output.steerCmd = max(-20.0, sys_output.steerCmd - 10.0)
-        elif plan_dir == "RIGHT":
-            sys_output.steerCmd = min(20.0, sys_output.steerCmd + 10.0)
-
-        return sys_output
+        return self.vehicle_ctrl.update(sys_input)
 
     def start(self, road_receiver: Optional["FrameReceiver"] = None, draw: bool = True):
         """Chạy vòng điều khiển 50 Hz và (nếu có road_receiver) vòng YOLO, mỗi vòng một thread."""
@@ -470,7 +461,7 @@ class AutonomousMasterController:
 
                 pedal_data = self.pedals.read() if self.pedals else NO_PEDALS
                 road, lane = self.fresh_road(now), self.fresh_lane(now)
-                out = self.control_step(pedal_data, road, lane)
+                out = self.control_step(pedal_data, road)
                 if self.sender:
                     self.sender.send(out)
 

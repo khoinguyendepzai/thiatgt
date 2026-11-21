@@ -284,6 +284,11 @@ class LaneChangePlanner:
         cfg = self.config
         origin = cfg.origin(bev.shape)
 
+        if lanes is None:
+            from bev_lane_detector import detect_lanes
+
+            lanes = detect_lanes(bev, cfg)
+
         def finish(
             status,
             reason,
@@ -303,6 +308,7 @@ class LaneChangePlanner:
                 bev,
                 result,
                 cfg,
+                lanes=lanes,
             )
 
             return result
@@ -335,11 +341,6 @@ class LaneChangePlanner:
                 "to evaluate a maneuver.",
             )
 
-        if lanes is None:
-            from bev_lane_detector import detect_lanes
-
-            lanes = detect_lanes(bev, cfg)
-
         reference = self._reference(
             lanes,
             origin,
@@ -360,8 +361,8 @@ class LaneChangePlanner:
         ):
             return finish(
                 "INSUFFICIENT_HORIZON",
-                "Front obstacle lies beyond "
-                "observed lane geometry.",
+                f"Obstacle {front_distance_m:.2f} m exceeds "
+                f"usable horizon {s[-1]:.2f} m.",
             )
 
         candidates = [

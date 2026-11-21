@@ -11,7 +11,6 @@ Chạy lại video hoặc thư mục ảnh đã ghi (thời gian lấy theo fps)
     python main.py --video run.mp4 --csv ketqua.csv
     python main.py --images thu_muc_anh --fps 30 --no-show --csv ketqua.csv
 """
-# hihi
 
 import argparse
 import csv
@@ -88,7 +87,9 @@ class TrackAndVehicleParams:
 
     @property
     def lane_width(self) -> float:
-        return self.lane_gap + self.line_width  # 0.43 m
+        # Với số hiện tại: 0.35 + 0.03 = 0.38 m. README / BaoCao_LDWS ghi 0.43 m (lane_gap 0.40) và xe 0.21 m:
+        # đo lại sa bàn và xe rồi sửa lane_gap / vehicle_width, vì LDWS, ngưỡng ISO và planner đều dùng giá trị này.
+        return self.lane_gap + self.line_width
 
 
 @dataclass

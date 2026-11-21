@@ -15,15 +15,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def find_model_file(model: str, base: str = HERE) -> str | None:
-    """Tìm file .pt: đúng đường dẫn cấu hình, ở thư mục gốc dự án, hoặc trong models/."""
-    candidates = [
-        model if os.path.isabs(model) else os.path.join(base, model),
-        os.path.join(base, os.path.basename(model)),
-        os.path.join(base, "models", os.path.basename(model)),
-    ]
-    for p in candidates:
+    """Tìm file .pt: đúng đường dẫn trong cấu hình (models/...), không có thì tìm cùng tên ở thư mục dự án."""
+    path = os.path.normpath(model if os.path.isabs(model) else os.path.join(base, model))
+    for p in (path, os.path.join(base, os.path.basename(model))):
         if os.path.isfile(p):
-            return os.path.normpath(p)
+            return p
     return None
 
 

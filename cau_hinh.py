@@ -27,6 +27,8 @@ FRAME_W, FRAME_H = 1280, 720
 # 640x360 rồi được phóng lên 1280x720): đặt vật cao H ở khoảng cách D đo bằng thước, đọc chiều cao khung bao h (px ở
 # 1280x720), FOCAL_LENGTH = h·D/H; lấy trung bình vài khoảng cách.
 FOCAL_LENGTH = 1452
+# Initial horizontal focal estimate at FRAME_W. Calibrate fx on the road camera.
+ROAD_FX_PX = FOCAL_LENGTH
 
 # ================= CHỐNG NHẬN NHẦM =================
 IMGSZ = 640

@@ -189,6 +189,8 @@ class PlanResult:
     )
 
     annotated_bev: np.ndarray | None = None
+    reference_px: np.ndarray | None = None
+    reference_direction: str | None = None
 
     assumptions: tuple[str, ...] = (
         "static_obstacle_on_reference_centerline",
@@ -238,11 +240,81 @@ def _segment_hits_box(
 
 
 class LaneChangePlanner:
+    INITIAL_CONFIRM_FRAMES = 3
+    SWITCH_CONFIRM_FRAMES = 5
+
+    def _update_reference_direction(self, lanes, active):
+        dashed = [] if lanes is None else [
+            side for side, marking in (("LEFT", lanes.left_marking), ("RIGHT", lanes.right_marking))
+            if marking == "dashed"
+        ]
+        if not active or not dashed:
+            self._pending_side = None
+            self._pending_count = 0
+            self._missing_frames += 1
+            if not active or self._missing_frames >= self.SWITCH_CONFIRM_FRAMES:
+                self._confirmed_side = None
+            return None
+        self._missing_frames = 0
+        if self._confirmed_side in dashed:
+            self._pending_side = None
+            self._pending_count = 0
+        else:
+            side = dashed[0]
+            if side != self._pending_side:
+                self._pending_side = side
+                self._pending_count = 0
+            self._pending_count += 1
+            required = self.SWITCH_CONFIRM_FRAMES if self._confirmed_side else self.INITIAL_CONFIRM_FRAMES
+            if self._pending_count >= required:
+                self._confirmed_side = side
+                self._pending_side = None
+                self._pending_count = 0
+        return self._confirmed_side
+
+    def marking_reference(self, lanes, camera_depth, image):
+        """Display-only lane-change reference based on paint and camera distance."""
+        result = PlanResult("NO_REFERENCE", "No current obstacle distance.")
+        active = camera_depth is not None and np.isfinite(camera_depth) and 0 < camera_depth < self.config.trigger_distance_m
+        direction = self._update_reference_direction(lanes, active)
+        if camera_depth is not None and np.isfinite(camera_depth) and camera_depth > 0:
+            if camera_depth >= self.config.trigger_distance_m:
+                result.reason = f"Camera {camera_depth:.2f} m outside trigger."
+            elif lanes is None:
+                result.reason = f"Camera {camera_depth:.2f} m | lane geometry unavailable."
+            elif "dashed" not in (lanes.left_marking, lanes.right_marking):
+                result.reason = (f"Camera {camera_depth:.2f} m | L={lanes.left_marking} "
+                                 f"R={lanes.right_marking} | waiting for dashed.")
+            elif direction is None:
+                result.reason = f"Confirming {self._pending_side} {self._pending_count}/{self.INITIAL_CONFIRM_FRAMES}"
+            else:
+                left = direction == "LEFT"
+                center = np.asarray(lanes.centerline_px, dtype=float)
+                path = center[np.argsort(-center[:, 1])].copy()
+                u = (path[0, 1] - path[:, 1]) / (path[0, 1] - path[-1, 1])
+                blend = u**3 * (10 - 15*u + 6*u**2)
+                width_px = lanes.lane_width_m / self.config.meters_per_pixel_x
+                path[:, 0] += (-1 if left else 1) * width_px * blend
+                result.status = "LANE_CHANGE_REFERENCE"
+                result.reason = f"{direction} reference | camera {camera_depth:.2f} m"
+                if self._pending_side:
+                    result.reason += f" | checking {self._pending_side} {self._pending_count}/{self.SWITCH_CONFIRM_FRAMES}"
+                result.reference_px = path
+                result.reference_direction = direction
+        if image is not None:
+            from bev_visualizer import draw_plan
+            result.annotated_bev = draw_plan(image, result, self.config, lanes)
+        return result
+
     def __init__(
         self,
         config: PlannerConfig | None = None,
     ):
         self.config = config or PlannerConfig()
+        self._confirmed_side = None
+        self._pending_side = None
+        self._pending_count = 0
+        self._missing_frames = 0
 
     def propose(
         self,
@@ -371,9 +443,6 @@ class LaneChangePlanner:
             forward = front_distance_m - reference_start_forward_m
             if forward < 0:
                 return finish("OBSTACLE_BEFORE_BEV", "Obstacle is closer than the visible lane.")
-            if forward > observed_xy[-1, 0] and within_trigger:
-                return finish("INSUFFICIENT_HORIZON",
-                              f"Obstacle {forward:.2f} m from BEV edge; observed {observed_xy[-1, 0]:.2f} m.")
             obstacle_s = float(np.interp(forward, observed_xy[:, 0], observed_arc))
             obstacle_s += max(0.0, forward - observed_xy[-1, 0])
 
@@ -529,7 +598,9 @@ class LaneChangePlanner:
         ):
             return None
 
-        xy[0] = 0.0
+        # Keep the measured lateral shape intact; snapping only the first
+        # sample to ego creates a corner in an otherwise straight reference.
+        xy[:, 0] -= xy[0, 0]
 
         arc = np.concatenate(
             (
@@ -566,7 +637,7 @@ class LaneChangePlanner:
 
         usable_horizon = arc[-1] - reserve
 
-        if usable_horizon < 0.1:
+        if usable_horizon < max(0.02, 3 * cfg.sample_step_m):
             return None
 
         s = np.linspace(
@@ -627,6 +698,7 @@ class LaneChangePlanner:
         length = cfg.speed_mps * duration
         target = sign * lanes.lane_width_m
 
+        initial_offset = -xy[0, 1] / normals[0, 1]
         if sign:
             u = np.clip(
                 s / length,
@@ -640,22 +712,23 @@ class LaneChangePlanner:
                 + 6 * u**5
             )
 
-            d = target * blend
+            displacement = target - initial_offset
+            d = initial_offset + displacement * blend
 
             # Lateral profile metrics on straight reference.
             jerk = (
-                abs(target)
+                abs(displacement)
                 * 60
                 / duration**3
             )
 
             lateral_accel = (
-                abs(target)
+                abs(displacement)
                 * (10 / np.sqrt(3))
                 / duration**2
             )
         else:
-            d = np.zeros_like(s)
+            d = np.full_like(s, initial_offset)
             jerk = 0.0
             lateral_accel = 0.0
 

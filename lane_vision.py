@@ -580,22 +580,36 @@ class LaneVision:
         geom.proc_ms = (time.perf_counter() - t0) * 1000.0
         return geom, VisionImages(undistorted, bird_eye_view, mask)
 
+    def marking_sampling(self):
+        return dict(visible=self.visible_mask, dash_px=self.px_y(self.params.dash_length),
+                    gap_px=self.px_y(self.params.dash_gap))
+
     def planner_observation(self, mask):
-        from bev_lane_detector import classify_marking
+        from bev_lane_detector import classify_marking_rows
         from lane_change_planner import LaneObservation
 
         tracks = [self.tracks[side] for side in ("left", "right")]
-        if any(track is None or not track.seen for track in tracks):
+        observed = [track for track in tracks if track is not None and track.seen]
+        if not observed:
             return None
-        top = max(track.rows[0] for track in tracks)
+        top = max(track.rows[0] for track in observed)
         ys = np.arange(self.h - 1, top - 1, -5)
         if len(ys) < 5:
             return None
-        left, right = [self.line_x_arr(track.coeffs, track.rows, ys) for track in tracks]
+        left, right = [self.line_x_arr(track.coeffs, track.rows, ys)
+                       if track is not None and track.seen else None for track in tracks]
+        if left is None:
+            left = right - self.lane_width_m * self.px_per_m_x
+        elif right is None:
+            right = left + self.lane_width_m * self.px_per_m_x
         widths = (right - left) / self.px_per_m_x
         if np.any(abs(widths - self.params.lane_width) > 0.3 * self.params.lane_width):
             return None
-        markings = [classify_marking(mask, track.coeffs, track.rows[0], track.rows[1] + 1)
+        scan_rows = np.arange(self.h)
+        sampling = self.marking_sampling()
+        markings = [classify_marking_rows(mask, scan_rows,
+                                          self.line_x_arr(track.coeffs, track.rows, scan_rows),
+                                          **sampling) if track is not None and track.seen else "unknown"
                     for track in tracks]
         return LaneObservation(np.column_stack(((left + right) / 2, ys)), float(np.median(widths)), *markings)
 

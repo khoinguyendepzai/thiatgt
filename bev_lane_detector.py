@@ -15,38 +15,26 @@ def classify_marking(
     coefficients,
     y_min,
     y_max,
+    **sampling,
 ):
-    occupancy = []
+    ys = np.arange(y_min, y_max)
+    return classify_marking_rows(mask, ys, np.polyval(coefficients, ys), **sampling)
 
-    for y in range(y_min, y_max):
-        x = round(
-            float(
-                np.polyval(
-                    coefficients,
-                    y,
-                )
-            )
-        )
 
-        left = max(0, x - 5)
-        right = min(
-            mask.shape[1],
-            x + 6,
-        )
-
-        occupied = (
-            right > left
-            and np.count_nonzero(
-                mask[y, left:right]
-            ) >= 2
-        )
-
-        occupancy.append(occupied)
-
-    occupied_rows = np.asarray(
-        occupancy,
-        dtype=np.uint8,
-    )
+def classify_marking_rows(mask, ys, xs, visible=None, *, dash_px=None, gap_px=None):
+    x = np.rint(xs).astype(int)[:, None] + np.arange(-5, 6)
+    inside = (x >= 0) & (x < mask.shape[1])
+    x = np.clip(x, 0, mask.shape[1] - 1)
+    if visible is not None:
+        inside &= visible[ys[:, None], x] != 0
+    usable = inside.sum(axis=1) >= 6
+    # Use one continuous visible span; a blind patch is not a gap in paint.
+    spans = np.flatnonzero(np.diff(np.r_[False, usable, False])).reshape(-1, 2)
+    if not len(spans):
+        return "unknown"
+    start, end = max(spans, key=lambda span: span[1] - span[0])
+    paint = (mask[ys[:, None], x] != 0) & inside
+    occupied_rows = (paint[start:end].sum(axis=1) >= 2).astype(np.uint8)
 
     if len(occupied_rows) < 30:
         return "unknown"
@@ -63,9 +51,6 @@ def classify_marking(
     coverage = float(
         np.mean(occupied_rows)
     )
-
-    if coverage > 0.85:
-        return "solid"
 
     padded = np.r_[
         0,
@@ -84,10 +69,21 @@ def classify_marking(
     runs = ends - starts
     gaps = starts[1:] - ends[:-1]
 
+    if dash_px is not None and gap_px is not None:
+        # A single close-up dash can occupy almost the entire visible span.
+        if coverage > 0.85 and runs.size and runs.max() >= 1.5 * dash_px:
+            return "solid"
+        plausible_run = (runs >= 0.20 * dash_px) & (runs <= 1.8 * dash_px)
+        plausible_gap = (gaps >= 0.45 * gap_px) & (gaps <= 1.8 * gap_px)
+        if np.any(plausible_run[:-1] & plausible_gap & plausible_run[1:]):
+            return "dashed"
+        return "unknown"
+
+    if coverage > 0.85:
+        return "solid"
     if (
         0.15 < coverage < 0.85
-        and np.count_nonzero(runs >= 5) >= 2
-        and np.any(gaps >= 5)
+        and np.any((runs[:-1] >= 5) & (runs[1:] >= 5) & (gaps >= 5))
     ):
         return "dashed"
 
@@ -97,6 +93,7 @@ def classify_marking(
 def detect_lanes(
     bev,
     config,
+    **marking_sampling,
 ):
     height, width = bev.shape[:2]
 
@@ -315,11 +312,13 @@ def detect_lanes(
             fits[0],
             top,
             int(ego_y) + 1,
+            **marking_sampling,
         ),
         right_marking=classify_marking(
             mask,
             fits[1],
             top,
             int(ego_y) + 1,
+            **marking_sampling,
         ),
     )

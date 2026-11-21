@@ -64,6 +64,11 @@ def draw_plan(
             -1,
         )
 
+    if result.reference_px is not None:
+        points = np.rint(result.reference_px).astype(np.int32)
+        cv2.polylines(output, [points], False, plan_color, 3, cv2.LINE_AA)
+        legend.append((f"Reference {result.reference_direction}", plan_color))
+
     ego_x, ego_y = config.origin(
         bev.shape
     )
@@ -117,10 +122,13 @@ def draw_plan(
     if lanes is not None:
         lines.append(f"Markings: L={lanes.left_marking}  R={lanes.right_marking}")
 
-    lines.append(
+    if result.status in ("LANE_CHANGE_REFERENCE", "NO_REFERENCE"):
+        lines.append("Visual reference only | clearance not evaluated")
+    else:
+        lines.append(
         "ASSUMPTION: static front obstacle; "
         "adjacent traffic NOT checked"
-    )
+        )
 
     for index, line in enumerate(lines):
         position = (

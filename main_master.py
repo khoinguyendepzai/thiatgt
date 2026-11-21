@@ -273,6 +273,7 @@ class RoadResult(NamedTuple):
     distances: dict  # {"xe_may": m, "nguoi_di_bo": m, "o_to": m}, -1 = không có vật
     proc_ms: float
     count: int  # số ảnh đã xử lý (để tính fps)
+    objects: tuple = ()  # (camera depth, horizontal centre in the resized YOLO frame)
 
 
 class LaneResult(NamedTuple):
@@ -345,7 +346,10 @@ class AutonomousMasterController:
         distances, yolo_frame = self.detector.process_frame(raw_frame, t_now)
         self._road_frames += 1
         self.road_result = RoadResult(t=t_now, distances=distances, proc_ms=(time.perf_counter() - t0) * 1000.0,
-                                      count=self._road_frames)
+                                      count=self._road_frames,
+                                      objects=tuple((tr.distance, (tr.box[0] + tr.box[2]) / 2)
+                                                    for tr in self.detector.tracker.confirmed()
+                                                    if tr.last_seen == t_now))
         return self.detector.draw_bboxes(yolo_frame) if draw else None
 
     def _road_loop(self, receiver: "FrameReceiver", draw: bool):
@@ -362,13 +366,27 @@ class AutonomousMasterController:
             self.stop_event.set()
 
     # ----------------------------- VÒNG LÀN (camera bird's-eye, thread chính) -----------------------------
-    def front_obstacle(self, now: float):
+    def front_obstacle(self, now: float, lanes):
         """(khoảng cách vật cản gần nhất phía trước, tuổi số đo) cho planner, từ kết quả YOLO còn mới."""
         road = self.fresh_road(now)
-        if road is None:
-            return NO_OBSTACLE_M, 0.0
-        valid = [d for d in road.distances.values() if d >= 0]
-        # YOLO reports optical depth. Assume a forward-facing level road camera.
+        if road is None or (lanes is None and road.objects):
+            return None, 0.0
+        from cau_hinh import FRAME_W, ROAD_FX_PX
+        valid = []
+        if road.objects:
+            cfg = self.planner_cfg
+            points = lanes.centerline_px
+            forward = (cfg.ego_y_px - points[:, 1]) * cfg.meters_per_pixel_y
+            lateral = (points[:, 0] - cfg.ego_x_px) * cfg.meters_per_pixel_x
+            # Extend the far tangent only for lane membership, not as observed road.
+            tail = forward >= forward[-1] - 0.15
+            slope = np.polyfit(forward[tail], lateral[tail], 1)[0]
+            for depth, u in road.objects:
+                x = depth + 0.22 - self.vision.BEV_NEAR
+                center = np.interp(x, forward, lateral) + slope * max(0., x - forward[-1])
+                object_right = (u - FRAME_W / 2) * depth / ROAD_FX_PX
+                if abs(object_right - center) <= lanes.lane_width_m / 2:
+                    valid.append(depth)
         distance = min(valid) if valid else NO_OBSTACLE_M
         return distance, max(0.0, now - road.t)
 
@@ -382,21 +400,19 @@ class AutonomousMasterController:
             geom, images = self.vision.process_undistorted(raw_frame, t_now)
         warn_res = self.warning.update(geom)
 
-        camera_distance_m, dist_age = self.front_obstacle(t_now)
+        lanes = self.vision.planner_observation(images.mask)
+        if lanes is None:
+            from bev_lane_detector import detect_lanes
+            lanes = detect_lanes(images.bev, self.planner_cfg, **self.vision.marking_sampling())
+        road = self.fresh_road(t_now)
+        camera_distance_m = min((depth for depth in road.distances.values() if depth > 0),
+                                default=None) if road is not None else None
         vis_cam = tracked_bev = None
         if draw:
             vis_cam, tracked_bev = self.vision.draw(
                 images, geom, warn_res.level, self.warning.hud_rows(warn_res, geom.valid)
             )
-        plan_res = self.planner.propose(
-            bev=images.bev,
-            overlay_base=tracked_bev,
-            lanes=self.vision.planner_observation(images.mask),
-            front_distance_m=camera_distance_m + 0.22,  # camera ahead of rear axle
-            camera_distance_m=camera_distance_m,
-            reference_start_forward_m=self.vision.BEV_NEAR,
-            distance_age_s=dist_age,
-        )
+        plan_res = self.planner.marking_reference(lanes, camera_distance_m, tracked_bev)
 
         detail = plan_res.reason
         if plan_res.candidates and plan_res.selected is None:

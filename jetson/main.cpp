@@ -45,8 +45,10 @@ using utils::messages::MessageName;
 // sensor-id của nvarguscamerasrc: 0 = cổng CAM0, 1 = cổng CAM1 (Jetson Nano B01 / Xavier NX có 2 cổng; Nano A02 chỉ
 // có 1 cổng). Hai cửa sổ bị tráo ảnh thì đổi hai số này cho nhau. Đặt -1 để TẮT camera đó (board chỉ có 1 cổng,
 // chạy thử 1 cam): không thử mở, không làm chậm camera còn lại.
-static constexpr int kLaneSensorId = 0;   // cam bám làn
-static constexpr int kRoadSensorId = 1;   // cam nhìn đường (YOLO)
+// Dây trên xe: cam bám làn cắm CAM1, cam nhìn đường cắm CAM0. Đổi ở đây thì đổi cả LANE_SENSOR_ID trong
+// calib/calib_camera.py.
+static constexpr int kLaneSensorId = 1;   // cam bám làn
+static constexpr int kRoadSensorId = 0;   // cam nhìn đường (YOLO)
 
 // flip-method của nvvidconv: 0 = giữ nguyên, 2 = xoay 180° (cam lắp ngược). Áp cho CẢ HAI camera. Phải giống
 // FLIP_METHOD trong calib/calib_camera.py: K và hệ số méo đo ở hướng nào thì chỉ đúng ở hướng đó (xoay 180° làm đổi

@@ -36,9 +36,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # Pipeline giống camera_source() trong main.cpp (Jetson): K và hệ số méo gắn với độ phân giải, sensor mode (vùng cắt)
 # và hướng xoay của pipeline này. Đổi một bên thì đổi bên kia và calib lại. Sensor mode 1920x1080 (16:9) rồi kéo giãn
 # về 640x480, nên fx ≠ fy. FLIP_METHOD phải bằng kFlipMethod trong main.cpp (0 = giữ nguyên, 2 = xoay 180°).
-# sensor N = sensor-id của nvarguscamerasrc (0 = CAM0, 1 = CAM1). Mặc định 0 = cam bám làn (kLaneSensorId), đổi bằng
-# --sensor.
-LANE_SENSOR_ID = 0
+# sensor N = sensor-id của nvarguscamerasrc (0 = CAM0, 1 = CAM1). Mặc định = cam bám làn, phải bằng kLaneSensorId
+# trong main.cpp; đổi bằng --sensor.
+LANE_SENSOR_ID = 1
 FLIP_METHOD = 2   # cam lắp ngược; kCameraCalibration trong main.cpp đo ở hướng này (bản Pi: libcamera tự xoay 180°)
 
 
@@ -297,7 +297,7 @@ def main():
     parser.add_argument("--dir", default=os.path.join(HERE, "chessboard"), help="thu muc chi chua anh chup")
     parser.add_argument("--out", default=HERE, help="thu muc ghi camera_calib.yaml va undistort_check.jpg")
     parser.add_argument("--sensor", type=int, default=LANE_SENSOR_ID,
-                        help="sensor-id cua nvarguscamerasrc: 0 = CAM0, 1 = CAM1 (mac dinh 0 = cam bam lan)")
+                        help="sensor-id cua nvarguscamerasrc: 0 = CAM0, 1 = CAM1 (mac dinh = cam bam lan)")
     parser.add_argument("--source", help="pipeline GStreamer tu viet (bo qua --sensor)")
     parser.add_argument("--calib_only", action="store_true", help="chi tinh tu anh da co, khong mo camera")
     args = parser.parse_args()

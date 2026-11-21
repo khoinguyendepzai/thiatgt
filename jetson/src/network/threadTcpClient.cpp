@@ -47,6 +47,17 @@ void ThreadTcpClient::thread_work() {
         return;
     }
     read_available();
+
+    // Vẫn nối nhưng PC ngừng gửi lệnh (main_master treo, Wi-Fi nghẽn): dừng xe
+    if (driving_ && Clock::now() - lastVcb_ > kCommandTimeout) send_stop_command("no @vcb for 300 ms");
+}
+
+void ThreadTcpClient::send_stop_command(const char* reason) {
+    driving_ = false;
+    steerSender_.send(0.0f);
+    speedSender_.send(0.0f);
+    directorySender_.send(0);
+    logger_ << "[TcpClient] STOP sent (speed 0, steer 0, dir 0): " << reason << '\n';
 }
 
 // Gọi từ thread khác (handler), SAU pause(). Mọi thứ đụng vào client_ đều nằm dưới ioMutex_.
@@ -76,6 +87,7 @@ void ThreadTcpClient::disconnect(const char* reason) {
     buffer_.clear();
     nextAttempt_ = Clock::now() + kReconnectInterval;
     logger_ << "[TcpClient] Disconnected (" << reason << ")\n";
+    if (driving_) send_stop_command(reason);
 }
 
 // TCP là stream: process_data() cắt message theo ";;", không theo ranh giới packet
@@ -149,6 +161,8 @@ void ThreadTcpClient::send_queue(const std::string& buff) {
         steerSender_.send(steer);
         speedSender_.send(speed);
         directorySender_.send(dir);
+        lastVcb_ = Clock::now();
+        driving_ = true;
     }
 
     else if (action == "state" || action == "mode") {

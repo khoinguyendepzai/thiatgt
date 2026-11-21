@@ -74,6 +74,7 @@ private:
         cv::Mat           raw;       // chuyển quyền sở hữu ra ngoài sau mỗi frame, read() kế tiếp cấp phát mới
         std::atomic<bool> opened{false};
         int               failures         = 0;       // số lần read() thất bại liên tiếp
+        int               openFailures     = 0;       // số lần open() thất bại liên tiếp (giãn thời gian thử lại)
         bool              firstFrameLogged = false;
         Clock::time_point nextAttempt{};             // thời điểm tiếp theo được phép thử mở
         utils::RateLimiter errorLimiter{utils::logcfg::kErrorCooldown};
@@ -106,8 +107,11 @@ private:
     utils::messages::MessageHandlerSender laneFrameSender_;   // MessageName::LaneCameraFrame
     utils::messages::MessageHandlerSender frameSender_;       // MessageName::CameraFrame
 
-    // Thời gian chờ giữa các lần thử mở lại camera
+    // Thời gian chờ giữa các lần thử mở lại camera. open() chặn cả thread (nvarguscamerasrc lỗi có thể mất vài giây),
+    // nên một camera hỏng làm camera kia đứng hình mỗi lần thử: sau kSlowRetryAfter lần lỗi liên tiếp thì thử thưa hơn.
     static constexpr std::chrono::seconds      kReconnectInterval{1};
+    static constexpr std::chrono::seconds      kSlowReconnectInterval{10};
+    static constexpr int                       kSlowRetryAfter = 3;
     // Nghỉ khi cả hai camera chưa mở (tránh quay vòng liên tục)
     static constexpr std::chrono::milliseconds kIdleSleep{100};
     // Nghỉ ngắn khi vòng này không đọc được frame nào

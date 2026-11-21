@@ -1,7 +1,7 @@
 """Calib ống kính camera bird's-eye bằng bàn cờ: tìm cameraMatrix (fx, fy, cx, cy) và distCoeffs (k1, k2, p1, p2, k3)
 để chỉnh méo, rồi in ra hai dòng C++ dán vào kCameraCalibration trong main.cpp.
 
-Chụp rồi tính (chạy trên xe Pi 5, cần màn hình hoặc ssh -X, TẮT braincar trước vì camera không mở được hai lần):
+Chụp rồi tính (chạy trên Jetson, cần màn hình hoặc ssh -X, TẮT braincar trước vì camera không mở được hai lần):
     python3 calib/calib_camera.py --cols 9 --rows 6 --square 25
 Chỉ tính lại từ ảnh đã chụp (không mở camera, chạy được trên PC sau khi scp thư mục ảnh về):
     python3 calib/calib_camera.py --cols 9 --rows 6 --square 25 --calib_only
@@ -26,7 +26,6 @@ import argparse
 import glob
 import os
 import re
-import subprocess
 import sys
 
 import cv2
@@ -34,46 +33,25 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-# Pipeline giống main.cpp: K và hệ số méo gắn với độ phân giải, sensor mode (vùng cắt) và hướng xoay của pipeline này.
-# Đổi một bên thì đổi bên kia và calib lại. 960x540 (16:9) để libcamera chọn sensor mode 1920x1080 như pipeline
-# Jetson cũ, rồi kéo giãn về 640x480 (xem chú thích trong main.cpp).
-# Chọn camera như main.cpp: sensor N = camera thứ N của "rpicam-hello --list-cameras" (như sensor-id của
-# nvarguscamerasrc trên Jetson). Mặc định sensor 0 = cam bám làn (kLaneSensorId), đổi bằng --sensor.
+# Pipeline giống camera_source() trong main.cpp (Jetson): K và hệ số méo gắn với độ phân giải, sensor mode (vùng cắt)
+# và hướng xoay của pipeline này. Đổi một bên thì đổi bên kia và calib lại. Sensor mode 1920x1080 (16:9) rồi kéo giãn
+# về 640x480, nên fx ≠ fy. FLIP_METHOD phải bằng kFlipMethod trong main.cpp (0 = giữ nguyên, 2 = xoay 180°).
+# sensor N = sensor-id của nvarguscamerasrc (0 = CAM0, 1 = CAM1). Mặc định 0 = cam bám làn (kLaneSensorId), đổi bằng
+# --sensor.
 LANE_SENSOR_ID = 0
-CAMERA_PIPELINE = (
-    "video/x-raw, width=960, height=540, format=NV12, framerate=30/1 ! "
-    "videoscale add-borders=false ! "
-    "video/x-raw, width=640, height=480 ! "
-    "videoconvert ! "
-    "video/x-raw, format=BGR ! "
-    "appsink drop=true max-buffers=1 sync=false"
-)
-
-
-def libcamera_cameras():
-    """camera-name theo thứ tự "rpicam-hello --list-cameras" (dòng "N : imx219 [...] (<tên>)"), giống
-    list_libcamera_cameras() trong main.cpp. Rỗng nếu không chạy được lệnh."""
-    try:
-        out = subprocess.run(["rpicam-hello", "--list-cameras"], capture_output=True, text=True, timeout=15)
-    except (OSError, subprocess.TimeoutExpired):
-        return []
-    names = []
-    for line in (out.stdout + "\n" + out.stderr).splitlines():
-        m = re.match(r"\s*(\d+) : .*\((.*)\)\s*$", line)
-        if m and int(m.group(1)) == len(names):
-            names.append(m.group(2))
-    return names
+FLIP_METHOD = 0
 
 
 def lane_camera_source(sensor):
-    """Pipeline của sensor: "libcamerasrc camera-name=..." + CAMERA_PIPELINE. Thoát nếu không có sensor đó."""
-    names = libcamera_cameras()
-    if sensor < len(names):
-        return f'libcamerasrc camera-name="{names[sensor]}" ! ' + CAMERA_PIPELINE
-    if not names and sensor == 0:
-        return "libcamerasrc ! " + CAMERA_PIPELINE   # không liệt kê được: libcamerasrc mở camera đầu tiên
-    sys.exit(f"[calib_camera] ERROR: khong thay sensor {sensor} (rpicam-hello --list-cameras thay {len(names)} "
-             "camera). Kiem tra cap va dtoverlay trong /boot/firmware/config.txt")
+    """Pipeline nvarguscamerasrc của sensor, ra BGR 640x480 như cam bám làn trong main.cpp."""
+    return (
+        f"nvarguscamerasrc sensor-id={sensor} ! "
+        "video/x-raw(memory:NVMM), width=1920, height=1080, format=NV12, framerate=30/1 ! "
+        f"nvvidconv flip-method={FLIP_METHOD} ! "
+        "video/x-raw, width=640, height=480, format=BGRx ! "
+        "videoconvert ! video/x-raw, format=BGR ! "
+        "appsink drop=true max-buffers=1 sync=false"
+    )
 
 
 CALIB_SIZE  = (640, 480)    # kCameraCalibration.imageSize trong main.cpp (ảnh bàn cờ chụp ở 960x540 trước 05/11/2026)
@@ -319,7 +297,7 @@ def main():
     parser.add_argument("--dir", default=os.path.join(HERE, "chessboard"), help="thu muc chi chua anh chup")
     parser.add_argument("--out", default=HERE, help="thu muc ghi camera_calib.yaml va undistort_check.jpg")
     parser.add_argument("--sensor", type=int, default=LANE_SENSOR_ID,
-                        help="sensor N = camera thu N cua rpicam-hello --list-cameras (mac dinh 0 = cam bam lan)")
+                        help="sensor-id cua nvarguscamerasrc: 0 = CAM0, 1 = CAM1 (mac dinh 0 = cam bam lan)")
     parser.add_argument("--source", help="pipeline GStreamer tu viet (bo qua --sensor)")
     parser.add_argument("--calib_only", action="store_true", help="chi tinh tu anh da co, khong mo camera")
     args = parser.parse_args()

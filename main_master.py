@@ -368,7 +368,9 @@ class AutonomousMasterController:
         if road is None:
             return NO_OBSTACLE_M, 0.0
         valid = [d for d in road.distances.values() if d >= 0]
-        return (min(valid) if valid else NO_OBSTACLE_M), max(0.0, now - road.t)
+        # YOLO reports optical depth. Assume a forward-facing level road camera.
+        distance = min(valid) if valid else NO_OBSTACLE_M
+        return distance, max(0.0, now - road.t)
 
     def lane_step(self, raw_frame: np.ndarray, t_now: float, draw: bool = True):
         """LDWS -> planner trên ảnh bird's-eye (giữ nguyên thuật toán), khoảng cách vật cản lấy từ vòng YOLO.
@@ -380,18 +382,33 @@ class AutonomousMasterController:
             geom, images = self.vision.process_undistorted(raw_frame, t_now)
         warn_res = self.warning.update(geom)
 
-        front_dist, dist_age = self.front_obstacle(t_now)
+        camera_distance_m, dist_age = self.front_obstacle(t_now)
+        vis_cam = tracked_bev = None
+        if draw:
+            vis_cam, tracked_bev = self.vision.draw(
+                images, geom, warn_res.level, self.warning.hud_rows(warn_res, geom.valid)
+            )
         plan_res = self.planner.propose(
             bev=images.bev,
-            front_distance_m=front_dist,
+            overlay_base=tracked_bev,
+            lanes=self.vision.planner_observation(images.mask),
+            front_distance_m=camera_distance_m + 0.22,  # camera ahead of rear axle
+            camera_distance_m=camera_distance_m,
+            reference_start_forward_m=self.vision.BEV_NEAR,
             distance_age_s=dist_age,
         )
 
+        detail = plan_res.reason
+        if plan_res.candidates and plan_res.selected is None:
+            detail = " | ".join(
+                f"{c.direction} {c.duration_s:g}s={','.join(c.rejection_reasons)}"
+                for c in plan_res.candidates
+            )
         self._lane_frames += 1
         self.lane_result = LaneResult(
             t=t_now,
             plan_dir=plan_res.selected.direction if plan_res.selected else None,
-            plan_status=plan_res.status,
+            plan_status=f"{plan_res.status} ({detail})",
             lor=warn_res.lor,
             proc_ms=(time.perf_counter() - t0) * 1000.0,
             count=self._lane_frames,
@@ -399,9 +416,7 @@ class AutonomousMasterController:
 
         if not draw:
             return warn_res, plan_res, None
-        vis_cam, vis_bev_ldws = self.vision.draw(images, geom, warn_res.level,
-                                                 self.warning.hud_rows(warn_res, geom.valid))
-        return warn_res, plan_res, (vis_cam, vis_bev_ldws, plan_res.annotated_bev)
+        return warn_res, plan_res, (vis_cam, plan_res.annotated_bev)
 
     # ----------------------------- VÒNG ĐIỀU KHIỂN (thread riêng, 50 Hz) -----------------------------
     def fresh_road(self, now: float):
@@ -560,10 +575,9 @@ def main():
             if frame is not None:
                 _, _, views = master.lane_step(frame, t_recv, draw=show)
                 if show:
-                    f_cam, f_ldws, f_plan = views
+                    f_cam, f_bev = views
                     cv2.imshow("2. LDWS Camera Overlay", f_cam)
-                    cv2.imshow("3. BEV Lane Tracking", f_ldws)
-                    cv2.imshow("4. BEV Lane Change Planner", f_plan)
+                    cv2.imshow("3. BEV Lane Tracking and Planner", f_bev)
             if show:
                 yolo = master.yolo_view
                 if yolo is not None and yolo is not shown_yolo:

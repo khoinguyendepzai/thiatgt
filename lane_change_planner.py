@@ -251,6 +251,9 @@ class LaneChangePlanner:
         *,
         lanes=None,
         distance_age_s=0.0,
+        reference_start_forward_m=None,
+        camera_distance_m=None,
+        overlay_base=None,
     ):
         """
         bev:
@@ -263,6 +266,11 @@ class LaneChangePlanner:
         lanes:
             Optional LaneObservation in the exact
             coordinate system of the input BEV.
+
+        reference_start_forward_m:
+            For a cropped BEV, distance from the rear axle to its near edge.
+            In this mode front_distance_m is longitudinal depth from the axle.
+            Candidates describe only the visible segment starting at that edge.
 
         Returns:
             PlanResult, including an annotated copy
@@ -305,7 +313,7 @@ class LaneChangePlanner:
             )
 
             result.annotated_bev = draw_plan(
-                bev,
+                bev if overlay_base is None else overlay_base,
                 result,
                 cfg,
                 lanes=lanes,
@@ -341,23 +349,37 @@ class LaneChangePlanner:
                 "to evaluate a maneuver.",
             )
 
-        reference = self._reference(
+        geometry = self._reference(
             lanes,
             origin,
         )
 
-        if reference is None:
+        if geometry is None:
             return finish(
                 "INVALID_LANES",
                 "Missing, incomplete or invalid "
                 "lane geometry.",
             )
 
+        reference, observed_xy, observed_arc = geometry
         s, _, _ = reference
+        # Server triggers on YOLO camera depth. Offline callers may use a common origin.
+        trigger_depth = front_distance_m if camera_distance_m is None else camera_distance_m
+        within_trigger = 0 < trigger_depth <= cfg.trigger_distance_m
+        obstacle_s = front_distance_m
+        if reference_start_forward_m is not None:
+            forward = front_distance_m - reference_start_forward_m
+            if forward < 0:
+                return finish("OBSTACLE_BEFORE_BEV", "Obstacle is closer than the visible lane.")
+            if forward > observed_xy[-1, 0] and within_trigger:
+                return finish("INSUFFICIENT_HORIZON",
+                              f"Obstacle {forward:.2f} m from BEV edge; observed {observed_xy[-1, 0]:.2f} m.")
+            obstacle_s = float(np.interp(forward, observed_xy[:, 0], observed_arc))
+            obstacle_s += max(0.0, forward - observed_xy[-1, 0])
 
         if (
-            front_distance_m <= cfg.trigger_distance_m
-            and front_distance_m > s[-1]
+            reference_start_forward_m is None and within_trigger
+            and obstacle_s > s[-1]
         ):
             return finish(
                 "INSUFFICIENT_HORIZON",
@@ -373,11 +395,11 @@ class LaneChangePlanner:
                 lanes=lanes,
                 shape=bev.shape,
                 origin=origin,
-                distance=front_distance_m,
+                distance=obstacle_s,
             )
         ]
 
-        if front_distance_m <= cfg.trigger_distance_m:
+        if within_trigger:
             directions = (
                 (-1, lanes.left_marking),
                 (1, lanes.right_marking),
@@ -394,7 +416,7 @@ class LaneChangePlanner:
                                 lanes=lanes,
                                 shape=bev.shape,
                                 origin=origin,
-                                distance=front_distance_m,
+                                distance=obstacle_s,
                             )
                         )
 
@@ -553,6 +575,7 @@ class LaneChangePlanner:
             count,
         )
 
+        observed_xy = xy
         xy = np.column_stack(
             [
                 np.interp(
@@ -586,7 +609,7 @@ class LaneChangePlanner:
             )
         )
 
-        return s, xy, normals
+        return (s, xy, normals), observed_xy, arc
 
     def _candidate(
         self,

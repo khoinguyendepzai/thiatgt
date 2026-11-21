@@ -10,7 +10,7 @@ import numpy as np
 from lane_change_planner import LaneObservation
 
 
-def _marking(
+def classify_marking(
     mask,
     coefficients,
     y_min,
@@ -310,13 +310,13 @@ def detect_lanes(
         lane_width_m=float(
             np.median(widths)
         ),
-        left_marking=_marking(
+        left_marking=classify_marking(
             mask,
             fits[0],
             top,
             int(ego_y) + 1,
         ),
-        right_marking=_marking(
+        right_marking=classify_marking(
             mask,
             fits[1],
             top,

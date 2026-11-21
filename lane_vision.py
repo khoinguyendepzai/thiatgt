@@ -580,6 +580,25 @@ class LaneVision:
         geom.proc_ms = (time.perf_counter() - t0) * 1000.0
         return geom, VisionImages(undistorted, bird_eye_view, mask)
 
+    def planner_observation(self, mask):
+        from bev_lane_detector import classify_marking
+        from lane_change_planner import LaneObservation
+
+        tracks = [self.tracks[side] for side in ("left", "right")]
+        if any(track is None or not track.seen for track in tracks):
+            return None
+        top = max(track.rows[0] for track in tracks)
+        ys = np.arange(self.h - 1, top - 1, -5)
+        if len(ys) < 5:
+            return None
+        left, right = [self.line_x_arr(track.coeffs, track.rows, ys) for track in tracks]
+        widths = (right - left) / self.px_per_m_x
+        if np.any(abs(widths - self.params.lane_width) > 0.3 * self.params.lane_width):
+            return None
+        markings = [classify_marking(mask, track.coeffs, track.rows[0], track.rows[1] + 1)
+                    for track in tracks]
+        return LaneObservation(np.column_stack(((left + right) / 2, ys)), float(np.median(widths)), *markings)
+
     def draw(self, images: VisionImages, geom: LaneGeometry, level: int, top_rows):
         """Vẽ vạch đang bám lên BEV, vùng làn lên ảnh camera (màu theo mức cảnh báo level của phần 2) và bảng HUD.
         top_rows: các dòng chữ đầu bảng do phần 2 cung cấp (trạng thái, LOR). Trả về (vis_cam, vis_bev)."""
@@ -607,6 +626,8 @@ class LaneVision:
 
         # Chiếu ngược vùng làn từ BEV về ảnh Camera gốc để quan sát trực quan như Tài liệu 1 & 2
         if len(pts_bev) == 2:
+            center = np.rint((pts_bev["left"] + pts_bev["right"]) / 2).astype(np.int32)
+            cv2.polylines(vis_bev, [center], False, (255, 200, 0), 7, cv2.LINE_AA)
             poly_bev = np.vstack((pts_bev["left"], pts_bev["right"][::-1])).astype(
                 np.float32
             ).reshape(-1, 1, 2)

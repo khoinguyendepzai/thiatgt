@@ -13,13 +13,12 @@ class ClassCfg:
     color: tuple[int, int, int] = (0, 255, 0)
 
 # ================= CÁC VẬT THỂ =================
-# CẢNH BÁO (kiểm tra 21/11/2026): ba lớp đang KHÁC tỉ lệ. Người đi bộ 0.1 m là cỡ mô hình, còn xe máy 1.10 m và
-# ô tô 1.50 m là cỡ thật. Trên sa bàn dùng mô hình xe máy / ô tô thì khoảng cách D = f·H/h tính ra XA GẤP ~10 lần
-# (planner kích hoạt ở 1.1 m sẽ không bao giờ chạy). Đo chiều cao / rộng thật của từng mô hình vật cản rồi sửa ở đây.
+# Chiều cao hiệu dụng của ô tô in trên sa bàn: mẫu đo từ camera 0.95 m, YOLO cũ báo 6.44 m.
+CAR_PRINT_HEIGHT_M = 1.50 * 0.95 / 6.44
 CLASSES = (
     ClassCfg(key="xe_may", model="models/xe_may.pt", names=(), real_height_m=1.10, real_width_m=0.69, conf=0.5, color=(255, 128, 0)),
     ClassCfg(key="nguoi_di_bo", model="models/nguoi_di_bo.pt", names=(), real_height_m=0.1, real_width_m=None, conf=0.5, color=(0, 200, 255)),
-    ClassCfg(key="o_to", model="models/o_to.pt", names=(), real_height_m=1.50, real_width_m=1.73, conf=0.5, color=(0, 255, 0)),
+    ClassCfg(key="o_to", model="models/o_to.pt", names=(), real_height_m=CAR_PRINT_HEIGHT_M, real_width_m=None, conf=0.5, color=(0, 255, 0)),
 )
 
 # ================= KHOẢNG CÁCH =================

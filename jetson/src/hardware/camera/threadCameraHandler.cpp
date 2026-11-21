@@ -124,18 +124,29 @@ void ThreadCameraHandler::log_frame(CameraSource& cam, const FrameInfo& info) {
 // Mở lại đúng source đã truyền vào constructor.
 // nextAttempt được đặt trước, nên mọi nhánh lỗi đều chờ đủ kReconnectInterval.
 void ThreadCameraHandler::try_open(CameraSource& cam) {
-    cam.nextAttempt = Clock::now() + kReconnectInterval;
+    // Nguồn rỗng = camera bị tắt trong main.cpp (sensor-id -1): không bao giờ thử mở
+    if (cam.source.empty()) {
+        if (cam.openFailures == 0) logger_ << "[CameraHandler] " << cam.name << " disabled (sensor id < 0)\n";
+        cam.openFailures = 1;
+        cam.nextAttempt  = Clock::time_point::max();
+        return;
+    }
+
+    cam.nextAttempt = Clock::now() + (cam.openFailures >= kSlowRetryAfter ? kSlowReconnectInterval : kReconnectInterval);
 
     cam.capture.release();
     if (!cam.capture.open(cam.source, apiPreference_) || !cam.capture.isOpened()) {
+        ++cam.openFailures;
         if (cam.errorLimiter.allow()) {
             logger_ << "[CameraHandler] ERROR: Cannot open " << cam.name << " source '" << cam.source
-                    << "' (check the pipeline and that OpenCV was built with GStreamer; for libcamerasrc, "
-                       "camera-name must match 'rpicam-hello --list-cameras' exactly)\n";
+                    << "'. Check on the Jetson: ls /dev/video* (no device = cable/port problem), "
+                       "gst-launch-1.0 nvarguscamerasrc sensor-id=N num-buffers=30 ! fakesink, OpenCV built with "
+                       "GStreamer, no other program using the camera (sudo systemctl restart nvargus-daemon)\n";
         }
         return;
     }
 
+    cam.openFailures     = 0;
     cam.failures         = 0;
     cam.firstFrameLogged = false;
     cam.opened           = true;

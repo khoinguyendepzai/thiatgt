@@ -38,7 +38,7 @@ using utils::messages::MessageHandlerSubscriber;
 using utils::messages::MessageName;
 
 // Chương trình xe (Jetson): 2 camera (cam bám làn nắn méo + cam nhìn đường) -> UDP về PC (main_master.py), TCP nhận
-// lệnh @vcb, serial xuống NUCLEO, state machine. Phím (terminal hoặc cửa sổ): q / ESC thoát (về STOP), s lưu test.jpg
+// lệnh #vcb, serial xuống NUCLEO, state machine. Phím (terminal hoặc cửa sổ): q / ESC thoát (về STOP), s lưu test.jpg
 // (ảnh thô cam bám làn) + road.jpg, 1..4 đổi state (DEFAULT, AUTO, MANUAL, STOP).
 // Chạy: ./braincar [<ip PC nhận UDP | any> [<ip PC chạy server TCP>]]   (mặc định cả hai là kPcIp)
 
@@ -48,9 +48,13 @@ using utils::messages::MessageName;
 static constexpr int kLaneSensorId = 0;   // cam bám làn
 static constexpr int kRoadSensorId = 1;   // cam nhìn đường (YOLO)
 
-// flip-method của nvvidconv: 0 = giữ nguyên, 2 = xoay 180° (cam lắp ngược). Phải giống FLIP_METHOD trong
-// calib/calib_camera.py: K và hệ số méo đo ở hướng nào thì chỉ đúng ở hướng đó (xoay 180° làm đổi cx, cy, p1, p2).
-static constexpr int kFlipMethod = 0;
+// flip-method của nvvidconv: 0 = giữ nguyên, 2 = xoay 180° (cam lắp ngược). Áp cho CẢ HAI camera. Phải giống
+// FLIP_METHOD trong calib/calib_camera.py: K và hệ số méo đo ở hướng nào thì chỉ đúng ở hướng đó (xoay 180° làm đổi
+// cx, cy, p1, p2).
+// Cam lắp ngược trên xe nên phải là 2. kCameraCalibration và homography trên PC đều đo ở hướng này: bản Pi dùng
+// libcamera, libcamera tự xoay 180° theo "rotation" của device tree; nvarguscamerasrc thì không tự xoay, để 0 là ảnh
+// lộn ngược.
+static constexpr int kFlipMethod = 2;
 
 // Cỡ ảnh mỗi camera. Cam bám làn 640x480: đúng cỡ calib kCameraCalibration (ảnh 16:9 kéo giãn về 4:3, nên fx ≠ fy).
 // Cam nhìn đường 640x360 (giữ tỉ lệ 16:9): main_master.py nhận đúng cỡ này (ROAD_FRAME_SIZE); ảnh bị kéo giãn thì

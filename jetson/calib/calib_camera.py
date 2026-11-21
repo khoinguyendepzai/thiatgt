@@ -39,7 +39,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # sensor N = sensor-id của nvarguscamerasrc (0 = CAM0, 1 = CAM1). Mặc định 0 = cam bám làn (kLaneSensorId), đổi bằng
 # --sensor.
 LANE_SENSOR_ID = 0
-FLIP_METHOD = 0
+FLIP_METHOD = 2   # cam lắp ngược; kCameraCalibration trong main.cpp đo ở hướng này (bản Pi: libcamera tự xoay 180°)
 
 
 def lane_camera_source(sensor):

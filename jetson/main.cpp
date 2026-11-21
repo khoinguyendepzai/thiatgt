@@ -70,7 +70,7 @@ static const perception::CameraCalibration kCameraCalibration{
 // IP của PC chạy main_master.py (xem bằng ipconfig trên PC). Gửi thẳng tới PC, KHÔNG broadcast: trên Wi-Fi gói broadcast
 // đi ở tốc độ cơ bản rất thấp, ảnh 2 camera cắt thành nhiều gói sẽ rớt gói liên tục và PC không ghép đủ ảnh nào.
 // TCP client không được để 0.0.0.0: Linux hiểu 0.0.0.0 là chính máy này, xe sẽ tự nối vào chính nó.
-static const std::string kPcIp = "192.168.1.8";
+static const std::string kPcIp = "192.168.1.9";
 
 // Cổng phải khớp --lane-port / --road-port / --tcp-port của main_master.py
 static const std::string       kUdpClientIp   = kPcIp;       // "any" / "0.0.0.0" = broadcast (không nên dùng)

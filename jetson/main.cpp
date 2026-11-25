@@ -9,8 +9,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <opencv2/highgui.hpp>
@@ -30,6 +32,7 @@
 #include <statemachine/systemMode.hpp>
 #include <utils/messages/allMessages.hpp>
 #include <utils/messages/messageHandlerSubscriber.hpp>
+#include <utils/logConfig.hpp>
 #include <utils/queues.hpp>
 
 using namespace std::chrono_literals;
@@ -65,6 +68,31 @@ static constexpr const char* kLaneCameraWindow = "Lane Camera (undistorted)";
 
 static std::atomic<bool> g_shutdownRequested{false};
 static void shutdown_signal_handler(int) { g_shutdownRequested.store(true); }
+
+// Đo fps ghi vào một FrameBuffer theo seq, cho dòng [Status] (giống Brain / BrainUp)
+class FpsMeter {
+public:
+    explicit FpsMeter(std::shared_ptr<const hardware::camera::FrameBuffer> buffer)
+        : buffer_(std::move(buffer)), lastSeq_(buffer_->latest().info.seq), lastTime_(Clock::now()) {}
+
+    // fps trung bình từ lần gọi trước (hoặc lúc tạo) tới giờ
+    double update() {
+        const std::uint64_t seq  = buffer_->latest().info.seq;
+        const auto          now  = Clock::now();
+        const double        secs = std::chrono::duration<double>(now - lastTime_).count();
+        const double        fps  = secs > 0.0 ? static_cast<double>(seq - lastSeq_) / secs : 0.0;
+        lastSeq_  = seq;
+        lastTime_ = now;
+        return fps;
+    }
+
+private:
+    using Clock = std::chrono::steady_clock;
+
+    std::shared_ptr<const hardware::camera::FrameBuffer> buffer_;
+    std::uint64_t                                        lastSeq_;
+    Clock::time_point                                    lastTime_;
+};
 
 // Ảnh hiện trong cửa sổ khi camera chưa có frame
 static cv::Mat no_signal_image(const std::string& camera) {
@@ -203,6 +231,9 @@ int main(int argc, char** argv) {
     TerminalKeys terminal;
     using Clock = std::chrono::steady_clock;
     auto nextNoSignal = Clock::now();
+    auto nextStatus   = Clock::now() + utils::logcfg::kMainStatusPeriod;
+    FpsMeter roadCameraFps(frames);
+    FpsMeter laneCameraFps(rawFrames);   // ảnh thô: đếm đúng số frame camera đọc được
 
     // imshow/waitKey phải chạy trên thread chính
     while (!g_shutdownRequested.load()) {
@@ -222,6 +253,24 @@ int main(int argc, char** argv) {
             if (!laneFrames->latest().image) {
                 cv::imshow(kLaneCameraWindow, no_signal_image("Cam bam lan (sensor 0)"));
             }
+        }
+
+        // Dòng trạng thái tổng thể (giống Brain / BrainUp, bỏ detect/lane/lc vì xe không còn dò làn, bám làn)
+        if (Clock::now() >= nextStatus) {
+            nextStatus = Clock::now() + utils::logcfg::kMainStatusPeriod;
+            const double roadFps = roadCameraFps.update();
+            const double laneFps = laneCameraFps.update();
+            std::cout << "[Status] state=" << statemachine::mode_to_string(sm.get_mode())
+                      << " | serial=" << (serial.is_connected() ? "connected" : "lost")
+                      << " | road_cam="
+                      << (camera.is_opened() ? "opened " + utils::logcfg::format_fps(roadFps) : "lost")
+                      << " | lane_cam="
+                      << (camera.is_lane_camera_opened() ? "opened " + utils::logcfg::format_fps(laneFps) : "lost")
+                      << " | udp=" << (net.is_udp_enabled() ? "on" : "off")
+                                   << (net.is_udp_open() ? "/open" : "/closed")
+                      << " | tcp=" << (net.is_tcp_enabled() ? "on" : "off")
+                                   << (net.is_tcp_connected() ? "/connected" : "/disconnected")
+                      << '\n';
         }
 
         // Phím từ terminal trước, rồi từ cửa sổ; waitKey cũng là khoảng nghỉ giữa các vòng

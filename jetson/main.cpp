@@ -30,7 +30,6 @@
 #include <statemachine/systemMode.hpp>
 #include <utils/messages/allMessages.hpp>
 #include <utils/messages/messageHandlerSubscriber.hpp>
-#include <utils/logConfig.hpp>
 #include <utils/queues.hpp>
 
 using namespace std::chrono_literals;
@@ -38,32 +37,10 @@ using utils::messages::FrameInfo;
 using utils::messages::MessageHandlerSubscriber;
 using utils::messages::MessageName;
 
-// Chương trình xe (Jetson): 2 camera (cam bám làn nắn méo + cam nhìn đường) -> UDP về PC (main_master.py), TCP nhận
-// lệnh #vcb, serial xuống NUCLEO, state machine. Phím (terminal hoặc cửa sổ): q / ESC thoát (về STOP), s lưu test.jpg
-// (ảnh thô cam bám làn) + road.jpg, 1..4 đổi state (DEFAULT, AUTO, MANUAL, STOP), d bật/tắt log debug lệnh lái.
-// Chạy: ./braincar [<ip PC nhận UDP | any> [<ip PC chạy server TCP>]]   (mặc định cả hai là kPcIp)
-
-// sensor-id của nvarguscamerasrc: 0 = cổng CAM0, 1 = cổng CAM1 (Jetson Nano B01 / Xavier NX có 2 cổng; Nano A02 chỉ
-// có 1 cổng). Hai cửa sổ bị tráo ảnh thì đổi hai số này cho nhau. Đặt -1 để TẮT camera đó (board chỉ có 1 cổng,
-// chạy thử 1 cam): không thử mở, không làm chậm camera còn lại.
-// Dây trên xe: cam bám làn cắm CAM1, cam nhìn đường cắm CAM0. Đổi ở đây thì đổi cả LANE_SENSOR_ID trong
-// calib/calib_camera.py.
-static constexpr int kLaneSensorId = 1;   // cam bám làn
-static constexpr int kRoadSensorId = 0;   // cam nhìn đường (YOLO)
-
-// flip-method của nvvidconv: 0 = giữ nguyên, 2 = xoay 180° (cam lắp ngược). Áp cho CẢ HAI camera. Phải giống
-// FLIP_METHOD trong calib/calib_camera.py: K và hệ số méo đo ở hướng nào thì chỉ đúng ở hướng đó (xoay 180° làm đổi
-// cx, cy, p1, p2).
-// Cam lắp ngược trên xe nên phải là 2. kCameraCalibration và homography trên PC đều đo ở hướng này: bản Pi dùng
-// libcamera, libcamera tự xoay 180° theo "rotation" của device tree; nvarguscamerasrc thì không tự xoay, để 0 là ảnh
-// lộn ngược.
-static constexpr int kFlipMethod = 2;
-
-// Cỡ ảnh mỗi camera. Cam bám làn 640x480: đúng cỡ calib kCameraCalibration (ảnh 16:9 kéo giãn về 4:3, nên fx ≠ fy).
-// Cam nhìn đường 640x360 (giữ tỉ lệ 16:9): main_master.py nhận đúng cỡ này (ROAD_FRAME_SIZE); ảnh bị kéo giãn thì
-// chiều cao khung bao sai và khoảng cách D = f·H/h của YOLO sai theo.
-static constexpr int kLaneWidth = 640, kLaneHeight = 480;
-static constexpr int kRoadWidth = 640, kRoadHeight = 360;
+// Chương trình xe: 2 camera (cam bám làn nắn méo + cam người lái) -> UDP về PC (main.py dò làn), TCP, serial, state
+// machine. Phím (terminal hoặc cửa sổ): q / ESC thoát (về STOP), s lưu test.jpg (ảnh thô cam bám làn) + road.jpg,
+// 1..4 đổi state (DEFAULT, AUTO, MANUAL, STOP).
+// Chạy: ./braincar [<ip nhận UDP | any> [<ip server TCP>]]
 
 // Calib ống kính cam bám làn ở 640x480 (homography nằm ở PC, GroundCalibration trong main.py)
 static const perception::CameraCalibration kCameraCalibration{
@@ -74,50 +51,20 @@ static const perception::CameraCalibration kCameraCalibration{
     cv::Vec<double, 5>(-0.35453198, 0.18076870, -0.00151746, 0.00140839, -0.06370173),   // k1, k2, p1, p2, k3
 };
 
-// IP của PC chạy main_master.py (xem bằng ipconfig trên PC). Gửi thẳng tới PC, KHÔNG broadcast: trên Wi-Fi gói broadcast
-// đi ở tốc độ cơ bản rất thấp, ảnh 2 camera cắt thành nhiều gói sẽ rớt gói liên tục và PC không ghép đủ ảnh nào.
-// TCP client không được để 0.0.0.0: Linux hiểu 0.0.0.0 là chính máy này, xe sẽ tự nối vào chính nó.
-static const std::string kPcIp = "192.168.124.136";
-
-// Cổng phải khớp --lane-port / --road-port / --tcp-port của main_master.py
-static const std::string       kUdpClientIp   = kPcIp;       // "any" / "0.0.0.0" = broadcast (không nên dùng)
+// Cổng UDP phải khớp LANE_PORT / ROAD_PORT trong main.py
+static const std::string       kUdpClientIp   = "0.0.0.0";   // 0.0.0.0 / any = broadcast
 static constexpr std::uint16_t kUdpLanePort   = 7000;        // cam bám làn đã nắn méo
-static constexpr std::uint16_t kUdpClientPort = 7001;        // cam nhìn đường
-static constexpr std::uint16_t kUdpTextPort   = 9000;        // telemetry text (main_master không nghe cổng này, vô hại)
-static const std::string       kTcpServerHost = kPcIp;
+static constexpr std::uint16_t kUdpClientPort = 7001;        // cam người lái
+static constexpr std::uint16_t kUdpTextPort   = 9000;        // telemetry text
+static const std::string       kTcpServerHost = "0.0.0.0";
 static constexpr std::uint16_t kTcpServerPort = 6000;
 static const hardware::serialhandler::SerialParams kSerialParams{"/dev/ttyACM0", 115200};
-
-// ---- Debug đường lệnh lái: PC --TCP--> ThreadTcpClient --gateway--> ThreadWrite --serial--> Nucleo ----
-// Mỗi điểm in tối đa một dòng mỗi utils::logcfg::kCommDebugPeriod (200 ms), kèm số gói đã qua giữa hai dòng.
-// Lúc chạy bấm 'd' để bật/tắt cả ba cùng lúc.
-//   [TcpClient][debug] RX raw ...   : byte thô nhận từ socket (\r \n hiện rõ) = PC thật sự gửi gì
-//   [TcpClient][debug] "..." -> ... : speed / steer / dir sau khi tách, đúng giá trị gửi vào gateway
-//   [Debug] gateway -> ThreadWrite  : main tự subscribe Speed/Steer/Directory (cùng tin ThreadWrite nhận), kèm trạng
-//                                     thái serial: biết lệnh có tới ThreadWrite không kể cả khi chưa cắm Nucleo
-//   [ThreadWrite][debug] ...        : lệnh "#speed:..;;" "#steer:..;;" "#dir:..;;" thật sự ghi xuống serial
-static constexpr bool kDebugTcp         = true;
-static constexpr bool kDebugGateway     = true;
-static constexpr bool kDebugSerialWrite = true;
 
 static constexpr const char* kCameraWindow     = "Camera";
 static constexpr const char* kLaneCameraWindow = "Lane Camera (undistorted)";
 
 static std::atomic<bool> g_shutdownRequested{false};
 static void shutdown_signal_handler(int) { g_shutdownRequested.store(true); }
-
-// Pipeline GStreamer của một camera CSI trên Jetson. Xin sensor mode 1920x1080 (16:9, vùng cắt giữa cảm biến giống mode
-// 1920x1080 lúc calib), nvvidconv xoay + thu nhỏ bằng phần cứng, videoconvert BGRx -> BGR cho OpenCV.
-// sensorId < 0: chuỗi rỗng = camera bị tắt (ThreadCameraHandler không thử mở).
-static std::string camera_source(int sensorId, int width, int height) {
-    if (sensorId < 0) return "";
-    return "nvarguscamerasrc sensor-id=" + std::to_string(sensorId) + " ! "
-           "video/x-raw(memory:NVMM), width=1920, height=1080, format=NV12, framerate=30/1 ! "
-           "nvvidconv flip-method=" + std::to_string(kFlipMethod) + " ! "
-           "video/x-raw, width=" + std::to_string(width) + ", height=" + std::to_string(height) + ", format=BGRx ! "
-           "videoconvert ! video/x-raw, format=BGR ! "
-           "appsink drop=true max-buffers=1 sync=false";
-}
 
 // Ảnh hiện trong cửa sổ khi camera chưa có frame
 static cv::Mat no_signal_image(const std::string& camera) {
@@ -167,16 +114,37 @@ int main(int argc, char** argv) {
     std::signal(SIGINT, shutdown_signal_handler);
     std::signal(SIGTERM, shutdown_signal_handler);
 
-    // Tắt WARN của OpenCV (camera thiếu thì thử mở lại, log rất dày). Đặt trước mọi lệnh OpenCV: đọc ở lần dùng đầu.
+    // Tắt log INFO của libcamera và WARN của OpenCV (camera thiếu thì thử mở lại mỗi giây, log rất dày).
+    // Đặt trước mọi lệnh OpenCV/camera: hai thư viện đọc biến môi trường ở lần dùng đầu tiên.
+    setenv("LIBCAMERA_LOG_LEVELS", "*:ERROR", 0);
     setenv("OPENCV_LOG_LEVEL", "ERROR", 0);
 
     const std::string udpClientIp   = (argc >= 2) ? argv[1] : kUdpClientIp;
     const std::string tcpServerHost = (argc >= 3) ? argv[2] : kTcpServerHost;
-    std::cout << "[Main] Anh UDP -> " << udpClientIp << " (cong " << kUdpLanePort << ", " << kUdpClientPort
-              << "), TCP server " << tcpServerHost << ':' << kTcpServerPort << '\n';
 
-    const std::string laneSource = camera_source(kLaneSensorId, kLaneWidth, kLaneHeight);
-    const std::string roadSource = camera_source(kRoadSensorId, kRoadWidth, kRoadHeight);
+    // Pipeline Jetson, chép nguyên từ README của BrainUp (mục 3.4). Xin sensor mode 1920x1080 của IMX219 (vùng cắt 16:9
+    // giữa cảm biến), nvvidconv xoay 180° (cam lắp ngược, flip-method=2) và thu nhỏ bằng phần cứng, videoconvert
+    // BGRx -> BGR cho OpenCV.
+    //   - Cam bám làn: sensor-id=0, kéo giãn cả khung 16:9 về 640x480 = đúng hình học lúc calib kCameraCalibration
+    //     (nên fx ≠ fy). Đổi bất cứ gì ở pipeline này thì phải calib lại.
+    //   - Cam người lái: sensor-id=1, 960x540 (giữ 16:9).
+    // Hai cửa sổ bị tráo ảnh thì đổi sensor-id=0 và sensor-id=1 cho nhau.
+    const std::string laneSource =
+        "nvarguscamerasrc sensor-id=0 ! "
+        "video/x-raw(memory:NVMM), width=1920, height=1080, format=NV12, framerate=30/1 ! "
+        "nvvidconv flip-method=2 ! "
+        "video/x-raw, width=640, height=480, format=BGRx ! "
+        "videoconvert ! "
+        "video/x-raw, format=BGR ! "
+        "appsink drop=true max-buffers=1 sync=false";
+    const std::string roadSource =
+        "nvarguscamerasrc sensor-id=1 ! "
+        "video/x-raw(memory:NVMM), width=1920, height=1080, format=NV12, framerate=30/1 ! "
+        "nvvidconv flip-method=2 ! "
+        "video/x-raw, width=960, height=540, format=BGRx ! "
+        "videoconvert ! "
+        "video/x-raw, format=BGR ! "
+        "appsink drop=true max-buffers=1 sync=false";
 
     // Hủy theo thứ tự ngược khai báo: gateway sống lâu nhất vì subscriber unsubscribe khi bị hủy
     utils::QueuesList queues = utils::create_default_queues_list();
@@ -188,8 +156,10 @@ int main(int argc, char** argv) {
     hardware::camera::ThreadCameraHandler camera(queues, roadSource, laneSource, kCameraCalibration);
     camera.start();
 
+    // Tham số cuối = debugging: true thì in dữ liệu TCP nhận được ([TcpClient][debug] RX raw + #vcb đã tách) và log
+    // gửi UDP. Đổi true/false ở đây rồi build lại.
     network::ThreadNetworkHandler net(queues, sm, camera.frame_buffer(), camera.lane_frame_buffer(),
-                                      tcpServerHost, kTcpServerPort);
+                                      tcpServerHost, kTcpServerPort, std::cerr, true);
     if (!net.add_udp_client(udpClientIp, kUdpClientPort, kUdpLanePort, kUdpTextPort)) {
         std::cerr << "UDP client khong hop le: " << udpClientIp << '\n';
         return 1;
@@ -197,30 +167,14 @@ int main(int argc, char** argv) {
     net.start();
 
     // Serial khai báo sau net để hủy trước: destructor gửi lệnh dừng rồi đóng cổng
-    hardware::serialhandler::ThreadSerialHandler serial(queues, kSerialParams);
+    // Tham số cuối = debugging: true thì in lệnh ThreadWrite ghi xuống Nucleo ([ThreadWrite][debug]) và tin ThreadRead
+    // nhận từ Nucleo. Đổi true/false ở đây rồi build lại.
+    hardware::serialhandler::ThreadSerialHandler serial(queues, kSerialParams, std::cerr, true);
     serial.start();
 
     // Control khai báo sau serial để hủy trước serial (phần điều khiển code sau)
     control::ThreadControlHandler control(queues);
     control.start();
-
-    // Debug đường lệnh lái (xem kDebug* ở đầu file)
-    bool debugComm = kDebugTcp || kDebugGateway || kDebugSerialWrite;
-    net.set_tcp_debugging(kDebugTcp);
-    serial.set_write_debugging(kDebugSerialWrite);
-    bool debugGateway = kDebugGateway;
-    // receiver khác "SerialWriter" / "UdpServer": gateway khóa theo (Owner, msgID, receiver)
-    MessageHandlerSubscriber dbgSpeedSub(queues, MessageName::Speed,     "lastonly", true, "MainDebug");
-    MessageHandlerSubscriber dbgSteerSub(queues, MessageName::Steer,     "lastonly", true, "MainDebug");
-    MessageHandlerSubscriber dbgDirSub  (queues, MessageName::Directory, "lastonly", true, "MainDebug");
-    float         dbgSpeed = 0.0f, dbgSteer = 0.0f;
-    int           dbgDir   = 0;
-    std::uint64_t dbgCount = 0;   // số tin Speed/Steer/Directory nhận được giữa hai dòng log
-    if (debugComm) {
-        std::cout << "[Main] Debug lenh lai: TCP " << (kDebugTcp ? "ON" : "OFF") << ", gateway "
-                  << (kDebugGateway ? "ON" : "OFF") << ", ThreadWrite " << (kDebugSerialWrite ? "ON" : "OFF")
-                  << " (bam d de bat/tat)\n";
-    }
 
     MessageHandlerSubscriber frameSub    (queues, MessageName::CameraFrame,     "lastonly", true, "CameraViewer");
     MessageHandlerSubscriber laneFrameSub(queues, MessageName::LaneCameraFrame, "lastonly", true, "CameraViewer");
@@ -232,15 +186,11 @@ int main(int argc, char** argv) {
     std::this_thread::sleep_for(100ms);
     sm.initialize_starting_mode();
 
-    // Chỉ mở cửa sổ khi có DISPLAY (chạy từ terminal trên màn hình Jetson, hoặc ssh -X / DISPLAY=:0 ./braincar).
-    // Không tự đặt DISPLAY=:0 như bản Pi: OpenCV của JetPack (GTK) gọi gtk_init(), không mở được màn hình là THOÁT luôn
-    // chương trình, không ném exception để bắt. Không có màn hình thì điều khiển bằng phím trong terminal.
-    const char* display     = std::getenv("DISPLAY");
-    bool        showWindows = display != nullptr && *display != '\0';
-    if (!showWindows) {
-        std::cout << "[Main] Khong co DISPLAY: chay khong cua so, bam phim trong terminal (1..4 doi state, d debug, q thoat).\n";
-    }
-    if (showWindows) try {
+    // Luôn mở cửa sổ; chạy qua SSH (DISPLAY rỗng) thì hiện lên màn hình của Pi. Không mở được thì dùng phím terminal.
+    const char* display = std::getenv("DISPLAY");
+    if (display == nullptr || *display == '\0') setenv("DISPLAY", ":0", 1);
+    bool showWindows = true;
+    try {
         for (const char* name : {kCameraWindow, kLaneCameraWindow}) {
             cv::namedWindow(name, cv::WINDOW_NORMAL);
             cv::resizeWindow(name, 960, 540);
@@ -253,7 +203,6 @@ int main(int argc, char** argv) {
     TerminalKeys terminal;
     using Clock = std::chrono::steady_clock;
     auto nextNoSignal = Clock::now();
-    auto nextDebug    = Clock::now();
 
     // imshow/waitKey phải chạy trên thread chính
     while (!g_shutdownRequested.load()) {
@@ -268,32 +217,11 @@ int main(int argc, char** argv) {
         if (showWindows && Clock::now() >= nextNoSignal) {
             nextNoSignal = Clock::now() + 1s;
             if (!frames->latest().image) {
-                cv::imshow(kCameraWindow, no_signal_image("Cam nhin duong (sensor " + std::to_string(kRoadSensorId) + ")"));
+                cv::imshow(kCameraWindow, no_signal_image("Cam nguoi lai (sensor 1)"));
             }
             if (!laneFrames->latest().image) {
-                cv::imshow(kLaneCameraWindow, no_signal_image("Cam bam lan (sensor " + std::to_string(kLaneSensorId) + ")"));
+                cv::imshow(kLaneCameraWindow, no_signal_image("Cam bam lan (sensor 0)"));
             }
-        }
-
-        // Lệnh lái trên gateway (cùng tin ThreadWrite nhận). Luôn rút tin để pipe không giữ giá trị cũ.
-        if (const auto msg = dbgSpeedSub.receive()) {
-            if (const auto* v = std::any_cast<float>(&*msg)) { dbgSpeed = *v; ++dbgCount; }
-        }
-        if (const auto msg = dbgSteerSub.receive()) {
-            if (const auto* v = std::any_cast<float>(&*msg)) { dbgSteer = *v; ++dbgCount; }
-        }
-        if (const auto msg = dbgDirSub.receive()) {
-            if (const auto* v = std::any_cast<int>(&*msg)) { dbgDir = *v; ++dbgCount; }
-        }
-        if (debugGateway && dbgCount > 0 && Clock::now() >= nextDebug) {
-            nextDebug = Clock::now() + utils::logcfg::kCommDebugPeriod;
-            std::cout << "[Debug] gateway -> ThreadWrite: speed=" << dbgSpeed << " steer=" << dbgSteer
-                      << " dir=" << dbgDir << "  (" << dbgCount << " tin) | state "
-                      << statemachine::mode_to_string(sm.get_mode()) << ", TCP "
-                      << (net.is_tcp_connected() ? "connected" : "NOT connected") << ", serial "
-                      << (serial.is_connected() ? "open" : "NOT open") << ", ThreadWrite "
-                      << (serial.is_write_enabled() ? "running" : "PAUSED (lenh khong xuong Nucleo)") << '\n';
-            dbgCount = 0;
         }
 
         // Phím từ terminal trước, rồi từ cửa sổ; waitKey cũng là khoảng nghỉ giữa các vòng
@@ -311,13 +239,6 @@ int main(int argc, char** argv) {
             if (const auto f = rawFrames->latest(); f.image) cv::imwrite("test.jpg", *f.image);
             if (const auto f = frames->latest(); f.image) cv::imwrite("road.jpg", *f.image);
             std::cout << "Da luu test.jpg, road.jpg\n";
-        }
-        if (key == 'd') {
-            debugComm    = !debugComm;
-            debugGateway = debugComm;
-            net.set_tcp_debugging(debugComm);
-            serial.set_write_debugging(debugComm);
-            std::cout << "[Main] Debug lenh lai (TCP, gateway, ThreadWrite): " << (debugComm ? "ON" : "OFF") << '\n';
         }
         if (key >= '1' && key < '1' + static_cast<int>(kKeyStates.size())) {
             sm.request_mode(kKeyStates[static_cast<std::size_t>(key - '1')]);

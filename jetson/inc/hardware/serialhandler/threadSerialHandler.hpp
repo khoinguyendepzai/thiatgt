@@ -29,10 +29,6 @@ public:
 
     // Kiểm tra cổng serial có đang mở hay không (ThreadSerialHandler đã kết nối thành công)
     bool is_connected() const { return connected_.load(); }
-    // ThreadWrite đang chạy (cổng mở + mode cho ghi). false thì lệnh từ gateway KHÔNG xuống Nucleo.
-    bool is_write_enabled() const { return !writeTh_->is_paused(); }
-    // Log debug của ThreadWrite (lệnh ghi xuống serial), bật/tắt lúc đang chạy. Không đụng tới log của ThreadRead.
-    void set_write_debugging(bool on) { writeTh_->set_debugging(on); }
 
 protected:
     void thread_work() override;

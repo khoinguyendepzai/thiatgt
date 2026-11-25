@@ -18,8 +18,8 @@
 
 namespace network {
 
-// Kết nối tới server TCP, nhận "#action:giá trị;;\r\n" và xử lý. Chỉ nhận message bắt đầu bằng '#' (main_master.py
-// gửi '#'); "@..." bị bỏ kèm WARNING:
+// Kết nối tới server TCP, nhận "#action:giá trị;;\r\n" và xử lý. Chỉ nhận message bắt đầu bằng '#'; "@..." bị bỏ
+// kèm WARNING:
 //   #vcb:speed;steer;dir -> Speed, Steer (float), Directory (int); thiếu field hoặc sai kiểu thì bỏ cả gói
 //   #state:TÊN / #mode:TÊN -> sm.request_mode() (không phân biệt hoa thường; tên sai thì bỏ qua)
 //   #distance:d -> Distance (float, m; < 0 = không có vật cản)
@@ -37,11 +37,6 @@ public:
 
     bool is_connected() const { return connected_.load(); }
 
-    // Bật/tắt log debug lúc đang chạy (gọi từ thread nào cũng được): in byte thô nhận từ TCP và giá trị #vcb đã
-    // tách, mỗi loại tối đa một dòng mỗi utils::logcfg::kCommDebugPeriod.
-    void set_debugging(bool on) { debugging_.store(on); }
-    bool debugging() const { return debugging_.load(); }
-
     // Đóng kết nối ngay. Handler gọi SAU pause(). Thread-safe (chờ thread_work() đang chạy xong).
     void disconnect_now();
 
@@ -56,12 +51,11 @@ private:
     void read_available();
     void process_data(const std::string& data);
     void send_queue(const std::string& buff);
-    void send_stop_command(const char* reason);   // tốc độ 0, lái thẳng, dir 0 (như pi_bridge khi mất lệnh)
 
     std::string host_;
     std::uint16_t port_;
     std::ostream& logger_;
-    std::atomic<bool> debugging_;
+    bool debugging_;   // in byte thô nhận từ TCP và #vcb đã tách (mỗi loại tối đa 1 dòng / kCommDebugPeriod)
 
     utils::messages::MessageHandlerSender steerSender_;
     utils::messages::MessageHandlerSender speedSender_;
@@ -76,11 +70,6 @@ private:
     std::atomic<bool> connected_{false};
     Clock::time_point nextAttempt_{};
 
-    // An toàn: NUCLEO giữ lệnh cuối cùng nhận được. Mất kết nối hoặc PC ngừng gửi #vcb quá kCommandTimeout thì gửi lệnh
-    // dừng một lần (main_master gửi 50 lần/s, nên 300 ms = ~15 lệnh liên tiếp bị mất).
-    Clock::time_point lastVcb_{};
-    bool              driving_ = false;   // đã nhận #vcb và chưa gửi lệnh dừng
-
     utils::RateLimiter errorLimiter_{utils::logcfg::kErrorCooldown};
 
     // Log debug (chỉ thread này dùng): byte thô và #vcb đã tách; đếm số chunk / byte / gói giữa hai dòng log
@@ -88,7 +77,6 @@ private:
     utils::RateLimiter vcbDebugLimiter_{utils::logcfg::kCommDebugPeriod};
     std::uint64_t      rawChunks_ = 0, rawBytes_ = 0, vcbCount_ = 0;
 
-    static constexpr std::chrono::milliseconds kCommandTimeout{300};
     static constexpr std::chrono::seconds kReconnectInterval{1};
     static constexpr std::chrono::milliseconds kConnectTimeout{1000};
     static constexpr std::size_t kMaxBufferSize = 4096;

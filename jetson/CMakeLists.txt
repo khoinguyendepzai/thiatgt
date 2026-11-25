@@ -1,5 +1,4 @@
-# 3.10: bản cmake của Ubuntu 18.04 (JetPack 4 trên Jetson Nano). File này không dùng tính năng nào mới hơn.
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.15)
 project(BrainCar LANGUAGES CXX)
 
 # ============================================================================

@@ -57,7 +57,7 @@ bool ThreadWrite::send_command(const std::string& action, const std::vector<Comm
         return false;
     }
 
-    if (debugging_.load()) {
+    if (debugging_) {
         if (!debugLine_.empty()) debugLine_ += "  ";
         debugLine_ += utils::strip(*cmd);
     }

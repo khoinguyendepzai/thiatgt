@@ -18,10 +18,10 @@
 
 namespace network {
 
-// Kết nối tới server TCP, nhận "#action:giá trị;;\r\n" và xử lý (main_master.py gửi '#'; '@' vẫn được nhận):
-//   #vcb:speed;steer;dir -> Speed, Steer (float), Directory (int); thiếu field hoặc sai kiểu thì bỏ cả gói
-//   #state:TÊN / #mode:TÊN -> sm.request_mode() (không phân biệt hoa thường; tên sai thì bỏ qua)
-//   #distance:d -> Distance (float, m; < 0 = không có vật cản)
+// Kết nối tới server TCP, nhận "@action:giá trị;;\r\n" và xử lý ('#' cũng được nhận, cho main_master.py bản cũ):
+//   @vcb:speed;steer;dir -> Speed, Steer (float), Directory (int); thiếu field hoặc sai kiểu thì bỏ cả gói
+//   @state:TÊN / @mode:TÊN -> sm.request_mode() (không phân biệt hoa thường; tên sai thì bỏ qua)
+//   @distance:d -> Distance (float, m; < 0 = không có vật cản)
 // process_data/send_queue giống hệt ThreadRead. Mất kết nối thì tự nối lại mỗi kReconnectInterval.
 class ThreadTcpClient : public templates::ThreadWithStop {
 public:
@@ -70,10 +70,10 @@ private:
     std::atomic<bool> connected_{false};
     Clock::time_point nextAttempt_{};
 
-    // An toàn: NUCLEO giữ lệnh cuối cùng nhận được. Mất kết nối hoặc PC ngừng gửi #vcb quá kCommandTimeout thì gửi lệnh
+    // An toàn: NUCLEO giữ lệnh cuối cùng nhận được. Mất kết nối hoặc PC ngừng gửi @vcb quá kCommandTimeout thì gửi lệnh
     // dừng một lần (main_master gửi 50 lần/s, nên 300 ms = ~15 lệnh liên tiếp bị mất).
     Clock::time_point lastVcb_{};
-    bool              driving_ = false;   // đã nhận #vcb và chưa gửi lệnh dừng
+    bool              driving_ = false;   // đã nhận @vcb và chưa gửi lệnh dừng
 
     utils::RateLimiter errorLimiter_{utils::logcfg::kErrorCooldown};
 

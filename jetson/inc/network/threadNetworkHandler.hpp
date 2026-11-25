@@ -16,7 +16,7 @@
 
 namespace network {
 
-// Sở hữu ThreadUdpServer (gửi ảnh + telemetry) và ThreadTcpClient (nhận #vcb, #state, #mode); bật/tắt chúng
+// Sở hữu ThreadUdpServer (gửi ảnh + telemetry) và ThreadTcpClient (nhận @vcb, @state, @mode); bật/tắt chúng
 // theo StateChange:
 //   - UDP: tắt = set_subscribed(false) rồi pause(); bật = set_subscribed(true) rồi resume().
 //   - TCP: tắt = pause() rồi disconnect_now(); bật = resume().

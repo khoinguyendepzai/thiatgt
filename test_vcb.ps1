@@ -1,7 +1,7 @@
-# Test lenh lai #vcb tu PC xuong Jetson, KHONG can main_master.py, ban dap hay vo lang.
+# Test lenh lai @vcb tu PC xuong Jetson, KHONG can main_master.py, ban dap hay vo lang.
 #
 # Script dong vai server cua main_master.py: mo TCP cong 6000, cho braincar tren Jetson ket noi, roi gui
-#   #vcb:<speed>;<steer>;<dir>;;\r\n      (dung dinh dang JetsonSender.send() trong main_master.py)
+#   @vcb:<speed>;<steer>;<dir>;;\r\n      (dung dinh dang JetsonSender.send() trong main_master.py, chuan '@' cua An)
 # Dong thoi nghe UDP cong 9000 (kUdpTextPort): moi lenh Jetson nhan duoc, ThreadUdpServer bao nguoc ve PC
 #   @ref:<speed>;;   @steer:<steer>;;     -> thay 2 dong nay khop voi lenh gui = Jetson da nhan dung.
 # (@speed = toc do do tu Nucleo, @imu = IMU: co khi Nucleo dang noi serial.)
@@ -16,7 +16,7 @@
 #   powershell -ExecutionPolicy Bypass -File .\test_vcb.ps1                          # 0.3 m/s, lai 10 do, tien, 5 s
 #   powershell -ExecutionPolicy Bypass -File .\test_vcb.ps1 -Speed 0.5 -Steer -15 -Dir 1 -Seconds 10
 #   powershell -ExecutionPolicy Bypass -File .\test_vcb.ps1 -Seconds 0              # gui mai, Ctrl+C de dung
-# Ket thuc (het gio hoac Ctrl+C) luon gui lenh dung #vcb:0.000;0.000;0;;
+# Ket thuc (het gio hoac Ctrl+C) luon gui lenh dung @vcb:0.000;0.000;0;;
 
 param(
     [double]$Speed    = 0.3,    # m/s (main_master: 0 .. 1.3 tien, 0 .. 0.8 lui)
@@ -33,7 +33,7 @@ $ErrorActionPreference = 'Stop'
 $inv = [System.Globalization.CultureInfo]::InvariantCulture
 
 function Format-Vcb([double]$s, [double]$st, [int]$d) {
-    return [string]::Format($inv, "#vcb:{0:F3};{1:F3};{2};;`r`n", $s, $st, $d)
+    return [string]::Format($inv, "@vcb:{0:F3};{1:F3};{2};;`r`n", $s, $st, $d)
 }
 
 # Doc het goi UDP Jetson bao ve, giu gia tri moi nhat cua tung loai (@ref, @steer, @speed, @imu)
@@ -105,7 +105,7 @@ finally {
         try {
             $stop = [System.Text.Encoding]::ASCII.GetBytes((Format-Vcb 0 0 0))
             $client.GetStream().Write($stop, 0, $stop.Length)
-            Write-Host 'Da gui lenh dung: #vcb:0.000;0.000;0;;'
+            Write-Host 'Da gui lenh dung: @vcb:0.000;0.000;0;;'
             Start-Sleep -Milliseconds 300
             if ($udp) { $end = @{}; Read-Echo $udp $end; Write-Host (Format-Echo $end) }
         } catch { Write-Host 'Khong gui duoc lenh dung (Jetson da ngat). Jetson tu dung xe sau 300 ms khong co lenh.' }

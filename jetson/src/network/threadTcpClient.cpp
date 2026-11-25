@@ -49,7 +49,7 @@ void ThreadTcpClient::thread_work() {
     read_available();
 
     // Vẫn nối nhưng PC ngừng gửi lệnh (main_master treo, Wi-Fi nghẽn): dừng xe
-    if (driving_ && Clock::now() - lastVcb_ > kCommandTimeout) send_stop_command("no #vcb for 300 ms");
+    if (driving_ && Clock::now() - lastVcb_ > kCommandTimeout) send_stop_command("no @vcb for 300 ms");
 }
 
 void ThreadTcpClient::send_stop_command(const char* reason) {
@@ -137,8 +137,9 @@ void ThreadTcpClient::process_data(const std::string& data) {
 }
 
 // ==================================== SENDING =======================================
-// Bóc tách một message và xử lý. Giống ThreadRead::send_queue() trừ các action và ký tự đầu: main_master.py gửi
-// "#vcb:...;;" (CMD_PREFIX = "#"); vẫn nhận '@' cho bản main_master / công cụ cũ.
+// Bóc tách một message và xử lý. Giống ThreadRead::send_queue() trừ các action.
+// Chuẩn là '@' như bản của An ('@' = tin vào Jetson, '#' = lệnh Jetson gửi xuống Nucleo). Vẫn nhận '#' để main_master.py
+// bản cũ (CMD_PREFIX = "#") không bị bỏ qua im lặng.
 void ThreadTcpClient::send_queue(const std::string& buff) {
     const auto colon = buff.find(':');
     if (buff.find_first_of("#@") == std::string::npos || colon == std::string::npos) return;

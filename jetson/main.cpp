@@ -38,7 +38,7 @@ using utils::messages::MessageHandlerSubscriber;
 using utils::messages::MessageName;
 
 // Chương trình xe (Jetson): 2 camera (cam bám làn nắn méo + cam nhìn đường) -> UDP về PC (main_master.py), TCP nhận
-// lệnh #vcb, serial xuống NUCLEO, state machine. Phím (terminal hoặc cửa sổ): q / ESC thoát (về STOP), s lưu test.jpg
+// lệnh @vcb, serial xuống NUCLEO, state machine. Phím (terminal hoặc cửa sổ): q / ESC thoát (về STOP), s lưu test.jpg
 // (ảnh thô cam bám làn) + road.jpg, 1..4 đổi state (DEFAULT, AUTO, MANUAL, STOP).
 // Chạy: ./braincar [<ip PC nhận UDP | any> [<ip PC chạy server TCP>]]   (mặc định cả hai là kPcIp)
 

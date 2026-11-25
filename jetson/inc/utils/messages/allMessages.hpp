@@ -13,10 +13,10 @@ enum class MessageName {
     LaneCameraFrame,   // ThreadCameraHandler: ảnh cam bám làn ĐÃ NẮN MÉO mới trong lane_frame_buffer()
 
     // Khoảng cách từ đầu xe tới mặt trước vật cản phía trước (float, m), < 0 = không có vật cản.
-    // Nguồn: máy remote chạy YOLO rồi gửi qua TCP (#distance). Hiện chưa ai dùng, code sau (dành cho ThreadControlHandler)
+    // Nguồn: máy remote chạy YOLO rồi gửi qua TCP (@distance). Hiện chưa ai dùng, code sau (dành cho ThreadControlHandler)
     Distance,
 
-    // To Nucleo: lệnh lái xe từ ThreadTcpClient (#vcb), ThreadWrite ghi xuống serial
+    // To Nucleo: lệnh lái xe từ ThreadTcpClient (@vcb), ThreadWrite ghi xuống serial
     Speed,
     Steer,
     Directory,

@@ -57,8 +57,23 @@ bool ThreadWrite::send_command(const std::string& action, const std::vector<Comm
         return false;
     }
 
-    if (debugging_) logger_ << "[ThreadWrite] " << utils::strip(*cmd) << '\n';
+    if (debugging_.load()) {
+        if (!debugLine_.empty()) debugLine_ += "  ";
+        debugLine_ += utils::strip(*cmd);
+    }
     return true;
+}
+
+// In các lệnh đã gom trong vòng này. force: in ngay, không qua debugLimiter_ (lệnh dừng).
+void ThreadWrite::flush_debug(const char* tag, bool force) {
+    if (debugLine_.empty()) return;
+    ++debugLoops_;
+    if (force || debugLimiter_.allow()) {
+        logger_ << "[ThreadWrite][debug] " << tag << " -> serial: " << debugLine_ << "  (" << debugLoops_
+                << " vong ghi tu lan log truoc)\n";
+        debugLoops_ = 0;
+    }
+    debugLine_.clear();
 }
 
 // Tên action và tên tham số phải khớp đúng bảng commands() trong messageConverter.cpp
@@ -72,6 +87,7 @@ void ThreadWrite::send_stop() {
     send_speed(0.0f);
     send_steer(0.0f);
     send_dir(0);
+    flush_debug("STOP", true);
 }
 
 void ThreadWrite::set_subscribed(bool on) {
@@ -99,6 +115,7 @@ void ThreadWrite::thread_work() {
     if (const auto v = receive_as<float>(speedSubscriber_))   send_speed(*v);
     if (const auto v = receive_as<float>(steerSubscriber_))   send_steer(*v);
     if (const auto v = receive_as<int>(directorySubscriber_)) send_dir(*v);
+    flush_debug("gateway", false);
 
     // THÊM KHỐI MỚI Ở ĐÂY
 }

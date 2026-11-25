@@ -16,7 +16,7 @@
 
 namespace network {
 
-// Sở hữu ThreadUdpServer (gửi ảnh + telemetry) và ThreadTcpClient (nhận @vcb, @state, @mode); bật/tắt chúng
+// Sở hữu ThreadUdpServer (gửi ảnh + telemetry) và ThreadTcpClient (nhận #vcb, #state, #mode); bật/tắt chúng
 // theo StateChange:
 //   - UDP: tắt = set_subscribed(false) rồi pause(); bật = set_subscribed(true) rồi resume().
 //   - TCP: tắt = pause() rồi disconnect_now(); bật = resume().
@@ -46,6 +46,8 @@ public:
     // Chuyển tiếp sang ThreadTcpClient
     bool is_tcp_connected() const { return tcpTh_->is_connected(); }
     bool is_tcp_enabled() const { return !tcpTh_->is_paused(); }
+    // Log debug của TCP client (byte thô + #vcb đã tách), bật/tắt lúc đang chạy
+    void set_tcp_debugging(bool on) { tcpTh_->set_debugging(on); }
 
 protected:
     void state_change_handler() override;   // nhận StateChange, bật/tắt thread con

@@ -14,6 +14,30 @@ namespace network {
 
 using utils::messages::MessageName;
 
+namespace {
+
+// Hiện ký tự điều khiển cho dễ đọc khi debug: \r \n \t, byte ngoài 0x20..0x7E thành \xHH
+std::string escape_for_log(const std::string& data) {
+    static const char kHex[] = "0123456789ABCDEF";
+    std::string out;
+    out.reserve(data.size() + 8);
+    for (const char ch : data) {
+        const auto c = static_cast<unsigned char>(ch);
+        if (c == '\r')                  out += "\\r";
+        else if (c == '\n')             out += "\\n";
+        else if (c == '\t')             out += "\\t";
+        else if (c >= 0x20 && c < 0x7F) out += ch;
+        else {
+            out += "\\x";
+            out += kHex[c >> 4];
+            out += kHex[c & 0x0F];
+        }
+    }
+    return out;
+}
+
+} // namespace
+
 // ===================================== INIT =========================================
 ThreadTcpClient::ThreadTcpClient(utils::QueuesList& queuesList, statemachine::StateMachine& sm,
                                  std::string host, std::uint16_t port,
@@ -49,7 +73,7 @@ void ThreadTcpClient::thread_work() {
     read_available();
 
     // Vẫn nối nhưng PC ngừng gửi lệnh (main_master treo, Wi-Fi nghẽn): dừng xe
-    if (driving_ && Clock::now() - lastVcb_ > kCommandTimeout) send_stop_command("no @vcb for 300 ms");
+    if (driving_ && Clock::now() - lastVcb_ > kCommandTimeout) send_stop_command("no #vcb for 300 ms");
 }
 
 void ThreadTcpClient::send_stop_command(const char* reason) {
@@ -100,6 +124,15 @@ void ThreadTcpClient::read_available() {
             disconnect("connection closed by server");
             return;
         }
+        if (debugging_.load()) {
+            ++rawChunks_;
+            rawBytes_ += data.size();
+            if (rawDebugLimiter_.allow()) {
+                logger_ << "[TcpClient][debug] RX raw (" << rawChunks_ << " chunk, " << rawBytes_
+                        << " byte tu lan log truoc): \"" << escape_for_log(data) << "\"\n";
+                rawChunks_ = rawBytes_ = 0;
+            }
+        }
         process_data(data);
     }
 }
@@ -137,21 +170,26 @@ void ThreadTcpClient::process_data(const std::string& data) {
 }
 
 // ==================================== SENDING =======================================
-// Bóc tách một message và xử lý. Giống ThreadRead::send_queue() trừ các action.
-// Chuẩn là '@' như bản của An ('@' = tin vào Jetson, '#' = lệnh Jetson gửi xuống Nucleo). Vẫn nhận '#' để main_master.py
-// bản cũ (CMD_PREFIX = "#") không bị bỏ qua im lặng.
+// Bóc tách một message và xử lý. Giống ThreadRead::send_queue() trừ các action và ký tự đầu: chỉ nhận message bắt đầu
+// bằng '#' (main_master.py gửi "#vcb:...;;", CMD_PREFIX = "#"). '@' là chiều Jetson -> PC (UDP), gửi vào đây bị bỏ.
+// buff đã strip() nên "\r\n" của gói trước không đứng chắn trước '#'.
 void ThreadTcpClient::send_queue(const std::string& buff) {
     const auto colon = buff.find(':');
-    if (buff.find_first_of("#@") == std::string::npos || colon == std::string::npos) return;
+    if (buff.empty() || buff.front() != '#' || colon == std::string::npos) {
+        // Luôn báo (giới hạn tần suất), không chỉ khi debug: gói "#vcb" bị bỏ âm thầm thì xe đứng mà không rõ lý do
+        if (errorLimiter_.allow()) {
+            logger_ << "[TcpClient] WARNING: message phai bat dau bang '#' va co ':', bo qua: \""
+                    << escape_for_log(buff) << "\"\n";
+        }
+        return;
+    }
 
-    // action chỉ giữ chữ và số
+    // action = phần giữa '#' và ':', chỉ giữ chữ và số
     std::string action;
-    for (char c : buff.substr(0, colon)) {
+    for (char c : buff.substr(1, colon - 1)) {
         if (std::isalnum(static_cast<unsigned char>(c))) action += c;
     }
     const std::vector<std::string> splittedValue = utils::split(buff.substr(colon + 1), ';');
-
-    if (debugging_) logger_ << "[TcpClient] " << buff << '\n';
 
     // Thiếu field hoặc sai kiểu thì ném exception, process_data() bắt và log
     if (action == "vcb") {
@@ -165,6 +203,16 @@ void ThreadTcpClient::send_queue(const std::string& buff) {
         directorySender_.send(dir);
         lastVcb_ = Clock::now();
         driving_ = true;
+
+        // Giá trị ĐÃ GỬI vào gateway (Speed/Steer/Directory -> ThreadWrite). So với gói PC gửi để soát thứ tự field.
+        if (debugging_.load()) {
+            ++vcbCount_;
+            if (vcbDebugLimiter_.allow()) {
+                logger_ << "[TcpClient][debug] \"" << buff << "\" -> speed=" << speed << " m/s, steer=" << steer
+                        << " deg, dir=" << dir << "  (" << vcbCount_ << " goi #vcb tu lan log truoc)\n";
+                vcbCount_ = 0;
+            }
+        }
     }
 
     else if (action == "state" || action == "mode") {
@@ -189,6 +237,10 @@ void ThreadTcpClient::send_queue(const std::string& buff) {
     }
 
     // THÊM ACTION MỚI Ở ĐÂY: else if (action == "xxx") { ... }
+
+    else if (debugging_.load()) {
+        logger_ << "[TcpClient][debug] action khong ho tro, bo qua: \"" << buff << "\"\n";
+    }
 }
 
 } // namespace network

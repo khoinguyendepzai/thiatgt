@@ -18,10 +18,11 @@
 
 namespace network {
 
-// Kết nối tới server TCP, nhận "@action:giá trị;;\r\n" và xử lý ('#' cũng được nhận, cho main_master.py bản cũ):
-//   @vcb:speed;steer;dir -> Speed, Steer (float), Directory (int); thiếu field hoặc sai kiểu thì bỏ cả gói
-//   @state:TÊN / @mode:TÊN -> sm.request_mode() (không phân biệt hoa thường; tên sai thì bỏ qua)
-//   @distance:d -> Distance (float, m; < 0 = không có vật cản)
+// Kết nối tới server TCP, nhận "#action:giá trị;;\r\n" và xử lý. Chỉ nhận message bắt đầu bằng '#' (main_master.py
+// gửi '#'); "@..." bị bỏ kèm WARNING:
+//   #vcb:speed;steer;dir -> Speed, Steer (float), Directory (int); thiếu field hoặc sai kiểu thì bỏ cả gói
+//   #state:TÊN / #mode:TÊN -> sm.request_mode() (không phân biệt hoa thường; tên sai thì bỏ qua)
+//   #distance:d -> Distance (float, m; < 0 = không có vật cản)
 // process_data/send_queue giống hệt ThreadRead. Mất kết nối thì tự nối lại mỗi kReconnectInterval.
 class ThreadTcpClient : public templates::ThreadWithStop {
 public:
@@ -35,6 +36,11 @@ public:
     ~ThreadTcpClient() override;
 
     bool is_connected() const { return connected_.load(); }
+
+    // Bật/tắt log debug lúc đang chạy (gọi từ thread nào cũng được): in byte thô nhận từ TCP và giá trị #vcb đã
+    // tách, mỗi loại tối đa một dòng mỗi utils::logcfg::kCommDebugPeriod.
+    void set_debugging(bool on) { debugging_.store(on); }
+    bool debugging() const { return debugging_.load(); }
 
     // Đóng kết nối ngay. Handler gọi SAU pause(). Thread-safe (chờ thread_work() đang chạy xong).
     void disconnect_now();
@@ -55,7 +61,7 @@ private:
     std::string host_;
     std::uint16_t port_;
     std::ostream& logger_;
-    bool debugging_;
+    std::atomic<bool> debugging_;
 
     utils::messages::MessageHandlerSender steerSender_;
     utils::messages::MessageHandlerSender speedSender_;
@@ -70,12 +76,17 @@ private:
     std::atomic<bool> connected_{false};
     Clock::time_point nextAttempt_{};
 
-    // An toàn: NUCLEO giữ lệnh cuối cùng nhận được. Mất kết nối hoặc PC ngừng gửi @vcb quá kCommandTimeout thì gửi lệnh
+    // An toàn: NUCLEO giữ lệnh cuối cùng nhận được. Mất kết nối hoặc PC ngừng gửi #vcb quá kCommandTimeout thì gửi lệnh
     // dừng một lần (main_master gửi 50 lần/s, nên 300 ms = ~15 lệnh liên tiếp bị mất).
     Clock::time_point lastVcb_{};
-    bool              driving_ = false;   // đã nhận @vcb và chưa gửi lệnh dừng
+    bool              driving_ = false;   // đã nhận #vcb và chưa gửi lệnh dừng
 
     utils::RateLimiter errorLimiter_{utils::logcfg::kErrorCooldown};
+
+    // Log debug (chỉ thread này dùng): byte thô và #vcb đã tách; đếm số chunk / byte / gói giữa hai dòng log
+    utils::RateLimiter rawDebugLimiter_{utils::logcfg::kCommDebugPeriod};
+    utils::RateLimiter vcbDebugLimiter_{utils::logcfg::kCommDebugPeriod};
+    std::uint64_t      rawChunks_ = 0, rawBytes_ = 0, vcbCount_ = 0;
 
     static constexpr std::chrono::milliseconds kCommandTimeout{300};
     static constexpr std::chrono::seconds kReconnectInterval{1};

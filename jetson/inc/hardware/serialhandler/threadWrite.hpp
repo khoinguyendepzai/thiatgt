@@ -1,6 +1,8 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <iostream>
 #include <mutex>
 #include <string>
@@ -32,6 +34,10 @@ public:
     // TRƯỚC resume(). Chỉ gọi từ thread của ThreadSerialHandler.
     void set_subscribed(bool on);
 
+    // Bật/tắt log debug lúc đang chạy (gọi từ thread nào cũng được): in các lệnh vừa ghi xuống serial, tối đa một
+    // dòng mỗi utils::logcfg::kCommDebugPeriod; lệnh dừng (send_stop) luôn in.
+    void set_debugging(bool on) { debugging_.store(on); }
+
 protected:
     void thread_work() override;
 
@@ -44,7 +50,7 @@ private:
 
     SerialPort&        port_;
     std::ostream&      logger_;
-    bool               debugging_;
+    std::atomic<bool>  debugging_;
     MessageConverter   converter_;
     bool               subscribed_ = true;   // constructor đã đăng ký sẵn (subscribeNow = true)
     // send_stop() (thread của ThreadSerialHandler) và thread_work() không gửi chen nhau
@@ -56,6 +62,12 @@ private:
     // THÊM SUBSCRIBER MỚI Ở ĐÂY (và khởi tạo trong constructor, thêm vào set_subscribed())
 
     utils::RateLimiter errorLimiter_{utils::logcfg::kErrorCooldown};
+
+    // Log debug (dưới sendMutex_): lệnh đã ghi trong vòng hiện tại, số vòng có ghi giữa hai dòng log
+    void flush_debug(const char* tag, bool force);
+    std::string        debugLine_;
+    std::uint64_t      debugLoops_ = 0;
+    utils::RateLimiter debugLimiter_{utils::logcfg::kCommDebugPeriod};
 };
 
 } // namespace hardware::serialhandler

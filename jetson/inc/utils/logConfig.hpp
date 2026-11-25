@@ -45,6 +45,10 @@ inline constexpr seconds kMainStatusPeriod{1};
 inline constexpr std::uint64_t kCameraLogEveryFrames = 100;
 inline constexpr std::uint64_t kUdpFrameLogEvery     = 100;
 
+// --- Log debug đường lệnh lái PC -> TCP -> gateway -> ThreadWrite -> Nucleo ------------------------
+// PC gửi #vcb 20-50 lần/s nên mỗi điểm log tối đa một dòng mỗi khoảng này (kèm số gói đã qua). Đặt 0 để in hết.
+inline constexpr milliseconds kCommDebugPeriod{200};
+
 // --- Chống spam log lỗi (utils::RateLimiter) -------------------------------------------------------
 // Một lỗi cùng loại tối đa một lần mỗi khoảng này.
 inline constexpr seconds kErrorCooldown{3};

@@ -30,6 +30,7 @@
 #include <statemachine/systemMode.hpp>
 #include <utils/messages/allMessages.hpp>
 #include <utils/messages/messageHandlerSubscriber.hpp>
+#include <utils/logConfig.hpp>
 #include <utils/queues.hpp>
 
 using namespace std::chrono_literals;
@@ -38,8 +39,8 @@ using utils::messages::MessageHandlerSubscriber;
 using utils::messages::MessageName;
 
 // Chương trình xe (Jetson): 2 camera (cam bám làn nắn méo + cam nhìn đường) -> UDP về PC (main_master.py), TCP nhận
-// lệnh @vcb, serial xuống NUCLEO, state machine. Phím (terminal hoặc cửa sổ): q / ESC thoát (về STOP), s lưu test.jpg
-// (ảnh thô cam bám làn) + road.jpg, 1..4 đổi state (DEFAULT, AUTO, MANUAL, STOP).
+// lệnh #vcb, serial xuống NUCLEO, state machine. Phím (terminal hoặc cửa sổ): q / ESC thoát (về STOP), s lưu test.jpg
+// (ảnh thô cam bám làn) + road.jpg, 1..4 đổi state (DEFAULT, AUTO, MANUAL, STOP), d bật/tắt log debug lệnh lái.
 // Chạy: ./braincar [<ip PC nhận UDP | any> [<ip PC chạy server TCP>]]   (mặc định cả hai là kPcIp)
 
 // sensor-id của nvarguscamerasrc: 0 = cổng CAM0, 1 = cổng CAM1 (Jetson Nano B01 / Xavier NX có 2 cổng; Nano A02 chỉ
@@ -86,6 +87,18 @@ static constexpr std::uint16_t kUdpTextPort   = 9000;        // telemetry text (
 static const std::string       kTcpServerHost = kPcIp;
 static constexpr std::uint16_t kTcpServerPort = 6000;
 static const hardware::serialhandler::SerialParams kSerialParams{"/dev/ttyACM0", 115200};
+
+// ---- Debug đường lệnh lái: PC --TCP--> ThreadTcpClient --gateway--> ThreadWrite --serial--> Nucleo ----
+// Mỗi điểm in tối đa một dòng mỗi utils::logcfg::kCommDebugPeriod (200 ms), kèm số gói đã qua giữa hai dòng.
+// Lúc chạy bấm 'd' để bật/tắt cả ba cùng lúc.
+//   [TcpClient][debug] RX raw ...   : byte thô nhận từ socket (\r \n hiện rõ) = PC thật sự gửi gì
+//   [TcpClient][debug] "..." -> ... : speed / steer / dir sau khi tách, đúng giá trị gửi vào gateway
+//   [Debug] gateway -> ThreadWrite  : main tự subscribe Speed/Steer/Directory (cùng tin ThreadWrite nhận), kèm trạng
+//                                     thái serial: biết lệnh có tới ThreadWrite không kể cả khi chưa cắm Nucleo
+//   [ThreadWrite][debug] ...        : lệnh "#speed:..;;" "#steer:..;;" "#dir:..;;" thật sự ghi xuống serial
+static constexpr bool kDebugTcp         = true;
+static constexpr bool kDebugGateway     = true;
+static constexpr bool kDebugSerialWrite = true;
 
 static constexpr const char* kCameraWindow     = "Camera";
 static constexpr const char* kLaneCameraWindow = "Lane Camera (undistorted)";
@@ -191,6 +204,24 @@ int main(int argc, char** argv) {
     control::ThreadControlHandler control(queues);
     control.start();
 
+    // Debug đường lệnh lái (xem kDebug* ở đầu file)
+    bool debugComm = kDebugTcp || kDebugGateway || kDebugSerialWrite;
+    net.set_tcp_debugging(kDebugTcp);
+    serial.set_write_debugging(kDebugSerialWrite);
+    bool debugGateway = kDebugGateway;
+    // receiver khác "SerialWriter" / "UdpServer": gateway khóa theo (Owner, msgID, receiver)
+    MessageHandlerSubscriber dbgSpeedSub(queues, MessageName::Speed,     "lastonly", true, "MainDebug");
+    MessageHandlerSubscriber dbgSteerSub(queues, MessageName::Steer,     "lastonly", true, "MainDebug");
+    MessageHandlerSubscriber dbgDirSub  (queues, MessageName::Directory, "lastonly", true, "MainDebug");
+    float         dbgSpeed = 0.0f, dbgSteer = 0.0f;
+    int           dbgDir   = 0;
+    std::uint64_t dbgCount = 0;   // số tin Speed/Steer/Directory nhận được giữa hai dòng log
+    if (debugComm) {
+        std::cout << "[Main] Debug lenh lai: TCP " << (kDebugTcp ? "ON" : "OFF") << ", gateway "
+                  << (kDebugGateway ? "ON" : "OFF") << ", ThreadWrite " << (kDebugSerialWrite ? "ON" : "OFF")
+                  << " (bam d de bat/tat)\n";
+    }
+
     MessageHandlerSubscriber frameSub    (queues, MessageName::CameraFrame,     "lastonly", true, "CameraViewer");
     MessageHandlerSubscriber laneFrameSub(queues, MessageName::LaneCameraFrame, "lastonly", true, "CameraViewer");
     const auto frames     = camera.frame_buffer();
@@ -207,7 +238,7 @@ int main(int argc, char** argv) {
     const char* display     = std::getenv("DISPLAY");
     bool        showWindows = display != nullptr && *display != '\0';
     if (!showWindows) {
-        std::cout << "[Main] Khong co DISPLAY: chay khong cua so, bam phim trong terminal (1..4 doi state, q thoat).\n";
+        std::cout << "[Main] Khong co DISPLAY: chay khong cua so, bam phim trong terminal (1..4 doi state, d debug, q thoat).\n";
     }
     if (showWindows) try {
         for (const char* name : {kCameraWindow, kLaneCameraWindow}) {
@@ -222,6 +253,7 @@ int main(int argc, char** argv) {
     TerminalKeys terminal;
     using Clock = std::chrono::steady_clock;
     auto nextNoSignal = Clock::now();
+    auto nextDebug    = Clock::now();
 
     // imshow/waitKey phải chạy trên thread chính
     while (!g_shutdownRequested.load()) {
@@ -243,6 +275,27 @@ int main(int argc, char** argv) {
             }
         }
 
+        // Lệnh lái trên gateway (cùng tin ThreadWrite nhận). Luôn rút tin để pipe không giữ giá trị cũ.
+        if (const auto msg = dbgSpeedSub.receive()) {
+            if (const auto* v = std::any_cast<float>(&*msg)) { dbgSpeed = *v; ++dbgCount; }
+        }
+        if (const auto msg = dbgSteerSub.receive()) {
+            if (const auto* v = std::any_cast<float>(&*msg)) { dbgSteer = *v; ++dbgCount; }
+        }
+        if (const auto msg = dbgDirSub.receive()) {
+            if (const auto* v = std::any_cast<int>(&*msg)) { dbgDir = *v; ++dbgCount; }
+        }
+        if (debugGateway && dbgCount > 0 && Clock::now() >= nextDebug) {
+            nextDebug = Clock::now() + utils::logcfg::kCommDebugPeriod;
+            std::cout << "[Debug] gateway -> ThreadWrite: speed=" << dbgSpeed << " steer=" << dbgSteer
+                      << " dir=" << dbgDir << "  (" << dbgCount << " tin) | state "
+                      << statemachine::mode_to_string(sm.get_mode()) << ", TCP "
+                      << (net.is_tcp_connected() ? "connected" : "NOT connected") << ", serial "
+                      << (serial.is_connected() ? "open" : "NOT open") << ", ThreadWrite "
+                      << (serial.is_write_enabled() ? "running" : "PAUSED (lenh khong xuong Nucleo)") << '\n';
+            dbgCount = 0;
+        }
+
         // Phím từ terminal trước, rồi từ cửa sổ; waitKey cũng là khoảng nghỉ giữa các vòng
         int key = terminal.read_key();
         if (showWindows) {
@@ -258,6 +311,13 @@ int main(int argc, char** argv) {
             if (const auto f = rawFrames->latest(); f.image) cv::imwrite("test.jpg", *f.image);
             if (const auto f = frames->latest(); f.image) cv::imwrite("road.jpg", *f.image);
             std::cout << "Da luu test.jpg, road.jpg\n";
+        }
+        if (key == 'd') {
+            debugComm    = !debugComm;
+            debugGateway = debugComm;
+            net.set_tcp_debugging(debugComm);
+            serial.set_write_debugging(debugComm);
+            std::cout << "[Main] Debug lenh lai (TCP, gateway, ThreadWrite): " << (debugComm ? "ON" : "OFF") << '\n';
         }
         if (key >= '1' && key < '1' + static_cast<int>(kKeyStates.size())) {
             sm.request_mode(kKeyStates[static_cast<std::size_t>(key - '1')]);

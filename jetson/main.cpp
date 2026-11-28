@@ -45,13 +45,13 @@ using utils::messages::MessageName;
 // 1..4 đổi state (DEFAULT, AUTO, MANUAL, STOP).
 // Chạy: ./braincar [<ip nhận UDP | any> [<ip server TCP>]]
 
-// Calib ống kính cam bám làn ở 640x480 (homography nằm ở PC, GroundCalibration trong main.py)
+// Calib ống kính cam bám làn ở 640x480, sensor mode 1640x1232 (homography ở PC: GroundCalibration trong main.py)
 static const perception::CameraCalibration kCameraCalibration{
     cv::Size(640, 480),
-    cv::Matx33d(511.765058, 0.0, 343.603342,    // fx, 0, cx
-                0.0, 686.394236, 168.575246,    // 0, fy, cy
+    cv::Matx33d(346.030263, 0.0, 331.061111,    // fx, 0, cx
+                0.0, 349.935107, 217.970511,    // 0, fy, cy
                 0.0, 0.0, 1.0),
-    cv::Vec<double, 5>(-0.36441441, 0.18473056, 0.00119689, -0.00105853, -0.05448647),   // k1, k2, p1, p2, k3
+    cv::Vec<double, 5>(-0.35874899, 0.14194399, 0.00100560, 0.00060548, -0.02648558),   // k1, k2, p1, p2, k3
 };
 
 // Cổng UDP phải khớp LANE_PORT / ROAD_PORT trong main.py
@@ -150,29 +150,31 @@ int main(int argc, char** argv) {
     const std::string udpClientIp   = (argc >= 2) ? argv[1] : kUdpClientIp;
     const std::string tcpServerHost = (argc >= 3) ? argv[2] : kTcpServerHost;
 
-    // Pipeline Jetson, chép nguyên từ README của BrainUp (mục 3.4). Xin sensor mode 1920x1080 của IMX219 (vùng cắt 16:9
-    // giữa cảm biến), nvvidconv xoay 180° (cam lắp ngược, flip-method=2) và thu nhỏ bằng phần cứng, videoconvert
+          // Pipeline Jetson. nvvidconv xoay 180° (cam lắp ngược, flip-method=2) và thu nhỏ bằng phần cứng, videoconvert
     // BGRx -> BGR cho OpenCV.
-    //   - Cam bám làn: sensor-id=0, kéo giãn cả khung 16:9 về 640x480 = đúng hình học lúc calib kCameraCalibration
-    //     (nên fx ≠ fy). Đổi bất cứ gì ở pipeline này thì phải calib lại.
-    //   - Cam người lái: sensor-id=1, 960x540 (giữ 16:9).
+    //   - Cam bám làn: sensor-id=1, sensor mode 3 = 1640x1232 (gộp 2x2 điểm ảnh trên TOÀN cảm biến IMX219, góc nhìn
+    //     rộng nhất ở 30 fps, khoảng 85° x 69°), thu về 640x480 cùng tỉ lệ 4:3 (nên fx ≈ fy). Trước đây dùng mode
+    //     1920x1080 = vùng cắt 16:9 giữa cảm biến, chỉ khoảng 64° x 38°. kCameraCalibration đo đúng pipeline này:
+    //     đổi bất cứ gì ở đây thì phải calib lại (calib/calib_camera.py --source "<chuỗi này>").
+    //   - Cam người lái: sensor-id=0, 1920x1080 -> 960x540 (giữ 16:9).
     // Hai cửa sổ bị tráo ảnh thì đổi sensor-id=0 và sensor-id=1 cho nhau.
     const std::string laneSource =
-        "nvarguscamerasrc sensor-id=0 ! "
-        "video/x-raw(memory:NVMM), width=1920, height=1080, format=NV12, framerate=30/1 ! "
+        "nvarguscamerasrc sensor-id=1 sensor-mode=3 ! "
+        "video/x-raw(memory:NVMM), width=1640, height=1232, format=NV12, framerate=30/1 ! "
         "nvvidconv flip-method=2 ! "
         "video/x-raw, width=640, height=480, format=BGRx ! "
         "videoconvert ! "
         "video/x-raw, format=BGR ! "
         "appsink drop=true max-buffers=1 sync=false";
     const std::string roadSource =
-        "nvarguscamerasrc sensor-id=1 ! "
+        "nvarguscamerasrc sensor-id=0 ! "
         "video/x-raw(memory:NVMM), width=1920, height=1080, format=NV12, framerate=30/1 ! "
         "nvvidconv flip-method=2 ! "
         "video/x-raw, width=960, height=540, format=BGRx ! "
         "videoconvert ! "
         "video/x-raw, format=BGR ! "
         "appsink drop=true max-buffers=1 sync=false";
+
 
     // Hủy theo thứ tự ngược khai báo: gateway sống lâu nhất vì subscriber unsubscribe khi bị hủy
     utils::QueuesList queues = utils::create_default_queues_list();
